@@ -1,5 +1,40 @@
 # CHANGELOG
 
+## 2026-09-13 · v1.0.1：修复上游 11128 风控拦截（UA / 角色归一化 / 指纹脱敏三线同步上游）
+
+### 背景
+
+- 2026-09-12 起腾讯 CodeBuddy 上游风控升级，代理发出的 chat 请求被按「非官方渠道」拦截：
+  HTTP 400 `code=11128 "Illegal API invocation from an unapproved channel"`，单号池轮空后客户端表现为
+  503 `no_healthy_account`。拦截为**逐字精确匹配**（非语义审核、非限流），重试无效。
+- 已知触发面（上游 Sliverkiss/workbuddy2api issue #25/#36/#39/#54）：旧版 UA 黑名单、
+  `role:"developer"` 不在白名单、system prompt 固定模板句指纹、请求体含裸数字 11128 的反探测、
+  工具调用 arguments 净化盲区。
+
+### 修复（对照上游 master 同步）
+
+- **headers.go**：出站 UA 对齐官方 WorkBuddy Desktop 三段式
+  `WorkBuddy/5.5.4 WorkBuddy/5.5.4 CLI/2.137.1`（旧值 `CLI/2.63.2 CodeBuddy/2.63.2` 已被风控拉黑）。
+- **payload.go**：新增 `normalizeRoles`——`developer` role 归一为 `system`（协议兼容层，
+  不受 `sanitize` 开关影响；大小写/空白容错，仅动 developer 一个值）。
+- **sanitize.go** 指纹脱敏全量同步：
+  - Codex instructions 首段指纹改写（首句插一词 `tool` 破坏逐字匹配，语义不变）
+  - Claude 身份句匹配串去结尾标点，覆盖桌面版「…for Claude, running within the Claude Agent SDK」变体
+  - 反馈句 `give→provide` 一词改写（整句含 anthropics 仓库链接才触发拦截）
+  - 裸数字 11128 反探测：请求体出现 `11128` 即整单拦截，改写为 `11-128`
+  - 新增 `sanitizeToolCalls`：净化 `tool_calls[].function.arguments`（content 为 null 的工具调用轮
+    旧版整条跳过，历史工具参数里的被拦字符串原样漏出）
+
+### 测试与验证
+
+- 新增 10 个回归用例：桌面版身份句、反馈句、11128 反探测、tool_calls 盲区、Codex 改写/预检/变体不动、
+  Codex wire body 集成、`normalizeRoles` 表驱动（含 messages 缺失不 panic）；`go test ./... -count=1` 全绿
+- 真机端到端：携带全套已知触发指纹（Codex 三句开头 + Claude 反馈句 + 裸 11128）的请求经代理打真实上游返回 200
+
+### 发布
+
+- Release 附 `workbuddy-proxy-windows-amd64.exe`（v1.0.1 编译产物）
+
 ## 2026-09-13 · v1.0.0 公开发布：多密钥管理 + Admin 界面重做
 
 ### 新功能

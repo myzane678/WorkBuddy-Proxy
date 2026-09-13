@@ -60,3 +60,40 @@ func TestPrepareBodyOptWithEfforts(t *testing.T) {
 		})
 	}
 }
+
+// normalizeRoles：developer role 不在上游白名单，命中即 400 code=11128；
+// 归一为 system 后语义不变，且不受 sanitize 开关影响。
+func TestNormalizeRoles(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want string
+	}{
+		{"developer normalized", `{"messages":[{"role":"developer","content":"be brief"}]}`, "system"},
+		{"developer case-insensitive", `{"messages":[{"role":"Developer","content":"x"}]}`, "system"},
+		{"developer trimmed", `{"messages":[{"role":" developer ","content":"x"}]}`, "system"},
+		{"system untouched", `{"messages":[{"role":"system","content":"x"}]}`, "system"},
+		{"user untouched", `{"messages":[{"role":"user","content":"x"}]}`, "user"},
+	}
+	for _, c := range cases {
+		out := PrepareBodyOpt([]byte(c.body), false)
+		var obj map[string]any
+		if err := json.Unmarshal(out, &obj); err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		msgs := obj["messages"].([]any)
+		role, _ := msgs[0].(map[string]any)["role"].(string)
+		if role != c.want {
+			t.Errorf("%s: role = %q, want %q", c.name, role, c.want)
+		}
+	}
+	// messages 缺失时不 panic、不新增 messages。
+	out := PrepareBodyOpt([]byte(`{"model":"glm-5.2"}`), false)
+	var obj map[string]any
+	if err := json.Unmarshal(out, &obj); err != nil {
+		t.Fatal(err)
+	}
+	if _, present := obj["messages"]; present {
+		t.Errorf("no-messages body gained messages: %s", out)
+	}
+}

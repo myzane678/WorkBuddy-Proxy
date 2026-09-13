@@ -9,7 +9,10 @@ import (
 )
 
 const (
-	clientUA            = "CLI/2.63.2 CodeBuddy/2.63.2"
+	// clientUA 出站 UA：对齐官方 WorkBuddy Desktop 三段式（applicationName/version
+	// + platform/version + CLI/<cliVersion>）。旧值 `CLI/2.63.2 CodeBuddy/2.63.2`
+	// 已被上游风控拉黑（上游 issue #54），换官方形状即解除拦截。
+	clientUA            = "WorkBuddy/5.5.4 WorkBuddy/5.5.4 CLI/2.137.1"
 	originRefererCN     = "https://www.codebuddy.cn"
 	originRefererGlobal = "https://www.workbuddy.ai"
 )
