@@ -65,6 +65,7 @@ func (s *chatStat) done() {
 		Credit:  s.credit,
 		TotalMs: total.Milliseconds(),
 	})
+	stats.record(s.model, s.status, s.inToks, s.toks, s.credit, ttfbOrMinusOne(s.ttfb))
 }
 
 // chatStatsReader 在流式透传时抓取 SSE 末帧的 usage.completion_tokens 精确值，

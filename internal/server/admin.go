@@ -45,6 +45,7 @@ func (h *Handler) registerAdmin(ext AdminExtras) {
 	h.mux.HandleFunc("GET /admin", h.adminPage)
 	h.mux.HandleFunc("GET /admin/api/overview", h.adminOverview)
 	h.mux.HandleFunc("GET /admin/api/requests", h.adminRequests)
+	h.mux.HandleFunc("GET /admin/api/stats", h.adminStats)
 	h.mux.HandleFunc("POST /admin/api/checkin", h.withAuth(h.adminCheckin))
 	h.mux.HandleFunc("POST /admin/api/restart", h.withAuth(h.adminRestart))
 	h.mux.HandleFunc("POST /admin/api/stop", h.withAuth(h.adminStop))
