@@ -431,6 +431,45 @@ func TestNoteSuccessIncrementsAndRecords(t *testing.T) {
 	}
 }
 
+func TestDeductCreditLocal(t *testing.T) {
+	// 准实时余量：usage.credit 小数实扣的本地扣减——零头凑满 1 才扣整数，
+	// 负值/未知 uid 不动；签到回写 SetCredits 覆盖为上游精确值（对账语义）。
+	p := New("")
+	p.Add(&auth.Auth{UID: "u1"})
+	p.SetCredits("u1", 100)
+
+	p.DeductCredit("u1", 0.03) // 零头累加，整数值不变
+	if st, _ := p.Status("u1"); st.Credits != 100 {
+		t.Fatalf("fractional credit should not deduct int yet: credits=%d", st.Credits)
+	}
+	for i := 0; i < 33; i++ { // 再扣 33 次 ×0.03 = 0.99 → 累计 1.02 → 扣 1
+		p.DeductCredit("u1", 0.03)
+	}
+	if st, _ := p.Status("u1"); st.Credits != 99 {
+		t.Fatalf("34×0.03=1.02 should deduct 1: credits=%d", st.Credits)
+	}
+	p.DeductCredit("u1", 200) // 大额扣减后钳 0（不出现负余额）
+	if st, _ := p.Status("u1"); st.Credits != 0 {
+		t.Fatalf("negative balance should clamp to 0: credits=%d", st.Credits)
+	}
+	p.DeductCredit("u1", 0.03) // 钳 0 后零头照常累加，不再产生负数
+	p.DeductCredit("ghost", 5) // 未知 uid 静默忽略
+	if st, _ := p.Status("u1"); st.Credits != 0 {
+		t.Fatalf("post-clamp accumulation must stay 0: credits=%d", st.Credits)
+	}
+
+	// 对账：签到回写精确值覆盖本地累计。
+	p.SetCredits("u1", 500)
+	if st, _ := p.Status("u1"); st.Credits != 500 {
+		t.Fatalf("SetCredits overwrite (reconciliation) failed: credits=%d", st.Credits)
+	}
+
+	p.DeductCredit("u1", -1) // usage 缺失（-1）不扣
+	if st, _ := p.Status("u1"); st.Credits != 500 {
+		t.Fatalf("negative credit must be ignored: credits=%d", st.Credits)
+	}
+}
+
 func TestReenableClearsCoolingNotBreaker(t *testing.T) {
 	// C5：签到解冻只清冷却（until/coolKind/reason）+ 更新 credits，不清熔断
 	// （fails/retryCount/breakerUntil）。签到成功只证明余额与 billing 通道恢复，

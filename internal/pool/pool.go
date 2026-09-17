@@ -85,6 +85,10 @@ type entry struct {
 	fails        int       // 连续失败计数（熔断用，唯一权威）
 	retryCount   int       // 已熔断次数（指数退避的指数）
 
+	// creditFrac 实扣积分的零头累加器（运行态，不持久化）：usage.credit 是小数（约 0.01~0.04/次），
+	// 而 credits 是整数，直接扣会被截断成 0；零头凑满 1 才扣 1（漂移 ≤1，签到时由 UserResource 对账校正）。
+	creditFrac float64
+
 	// inFlight 单账号在途请求数（运行态，不持久化）。用 atomic 避免 Pick 热路径拿写锁。
 	inFlight atomic.Int64
 }
@@ -676,6 +680,31 @@ func (p *Pool) SetCredits(uid string, credits int64) {
 	defer p.mu.Unlock()
 	if e, ok := p.byUID[uid]; ok {
 		e.credits = credits
+		p.dirty.Store(true)
+	}
+}
+
+// DeductCredit 从账号余额中本地扣减本次实扣积分（usage.credit，准实时余量）。
+// 小数部分进零头累加器 creditFrac，凑满 1 才做整数扣减；扣后为负则钳 0（与 UserResource 语义一致）。
+// credit < 0（usage 缺失）时不扣。签到回写 SetCredits 时余额被上游精确值覆盖，自然完成对账。
+func (p *Pool) DeductCredit(uid string, credit float64) {
+	if credit < 0 {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	e, ok := p.byUID[uid]
+	if !ok {
+		return
+	}
+	e.creditFrac += credit
+	if e.creditFrac >= 1 {
+		deduct := int64(e.creditFrac)
+		e.creditFrac -= float64(deduct)
+		e.credits -= deduct
+		if e.credits < 0 {
+			e.credits = 0
+		}
 		p.dirty.Store(true)
 	}
 }

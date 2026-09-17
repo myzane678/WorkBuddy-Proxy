@@ -391,6 +391,8 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			st.toks, _ = stats.Tokens()
 			st.inToks = stats.InputTokens()
 			st.credit = stats.Credit()
+			// 准实时余量：从池内 credits 本地扣减本次实扣（签到回写时由上游对账校正）。
+			h.cfg.Pool.DeductCredit(acct.UID, st.credit)
 			rc.Close()
 			return
 		}
@@ -407,6 +409,8 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		st.toks = completionTokens(resp)
 		st.inToks = syncInputTokens(resp)
 		st.credit = syncCredit(resp)
+		// 准实时余量：从池内 credits 本地扣减本次实扣（签到回写时由上游对账校正）。
+		h.cfg.Pool.DeductCredit(acct.UID, st.credit)
 		return
 	}
 	msg := "all accounts unavailable (cooling/disabled)"
