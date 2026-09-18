@@ -88,6 +88,9 @@ body{min-height:100vh;background:var(--bg)}
 .btn:active{transform:translateY(1px)}
 .btn.primary{background:#18181b;border-color:#18181b;color:#fff}
 .btn.primary:hover{background:#27272a;border-color:#27272a;color:#fff;box-shadow:0 3px 10px rgba(24,24,27,.25)}
+/* 今日已签到：淡化禁用态（灰底灰字，去悬浮效果），颜色对比 primary 的黑底 */
+.btn.done{background:var(--soft);border-color:var(--line);color:#9aa3af;cursor:default;box-shadow:none}
+.btn.done:hover{background:var(--soft);border-color:var(--line);color:#9aa3af;box-shadow:none;transform:none}
 .btn.danger{color:var(--err)}
 .btn.danger:hover{border-color:#fca5a5;background:#fef2f2;color:#b91c1c}
 .btn[disabled]{opacity:.45;cursor:not-allowed;pointer-events:none}
@@ -146,6 +149,37 @@ td.kname{font-family:inherit;font-weight:600;white-space:nowrap}
 .ucard .s{color:var(--dim2);font-size:11px;font-family:var(--mono);margin-top:1px}
 .s .serr{color:var(--err);font-weight:600}
 .v.ok{color:var(--ok)} .v.err{color:var(--err)} .v.warn{color:var(--warn)} .v.acc{color:var(--acc)}
+
+/* ───── 历史用量日期选择（日历弹层） ───── */
+.datewrap{position:relative}
+.datechip svg{width:13px;height:13px;flex:none;opacity:.8}
+.datechip .caret{width:9px;height:9px;opacity:.55}
+.calpop{display:none;position:absolute;top:calc(100% + 8px);right:0;z-index:60;width:296px;
+  background:var(--card);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow-lg);
+  padding:12px 13px 10px}
+.calpop.on{display:block;animation:calin .12s ease}
+@keyframes calin{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
+.calhead{display:flex;align-items:center;gap:5px;margin-bottom:8px}
+.calhead b{flex:1;text-align:center;font-size:13.5px;letter-spacing:.3px}
+.calnav{border:0;background:none;cursor:pointer;width:26px;height:26px;border-radius:7px;color:var(--dim);
+  font-size:16px;line-height:1;font-family:inherit;flex:none}
+.calnav:hover{background:var(--soft);color:var(--txt)}
+.caltoday{border:1px solid var(--line2);background:var(--card);cursor:pointer;border-radius:7px;
+  padding:3px 10px;font-size:11.5px;font-weight:600;color:var(--acc);font-family:inherit;flex:none}
+.caltoday:hover{background:var(--soft)}
+.calgrid{display:grid;grid-template-columns:repeat(7,1fr);gap:3px}
+.calwd{color:var(--dim2);font-size:10.5px;text-align:center;padding:2px 0 4px;font-weight:600}
+.calcell{position:relative;border:1px solid transparent;background:none;cursor:pointer;height:30px;
+  border-radius:7px;font-size:12px;font-family:var(--mono);color:var(--txt);padding:0}
+.calcell:hover{background:var(--soft)}
+.calcell.sel{background:var(--acc);color:#fff;font-weight:700}
+.calcell.has::after{content:"";position:absolute;left:50%;bottom:3px;transform:translateX(-50%);
+  width:4px;height:4px;border-radius:50%;background:var(--acc)}
+.calcell.sel.has::after{background:#fff}
+.calcell.off{color:#c3cad6;cursor:not-allowed}
+.calcell.off:hover{background:none}
+.calcell.future{color:#dde2ea;cursor:not-allowed}
+.calnote{margin-top:8px;color:var(--dim2);font-size:10.5px;text-align:center}
 
 /* ───── 概览图表:趋势柱状图 + 模型分布环形图 ───── */
 .charts{display:grid;grid-template-columns:minmax(0,7fr) minmax(320px,5fr);gap:16px;align-items:stretch}
@@ -263,6 +297,28 @@ td.num{text-align:right}
 .mode{display:inline-block;padding:1px 8px;border-radius:6px;font-size:11px;font-weight:500;
   background:var(--soft2);color:var(--dim)}
 .tablewrap{overflow:auto;max-height:680px;border:1px solid var(--line);border-radius:10px;background:var(--card)}
+
+/* ───── 请求日志分页器：首/末页常驻，中间页码超宽折叠为省略号 ───── */
+.pagerbar{display:flex;justify-content:center;align-items:center;gap:4px;margin-top:14px;flex-wrap:wrap}
+.pbtn{min-width:32px;height:32px;border:1px solid var(--line2);background:var(--card);border-radius:7px;
+  cursor:pointer;font-size:12.5px;font-family:var(--mono);color:var(--txt);padding:0 8px;
+  transition:all .12s ease;display:inline-flex;align-items:center;justify-content:center}
+.pbtn:hover:not(:disabled):not(.on){border-color:#b9c2d0;background:var(--soft)}
+.pbtn.on{background:var(--acc);border-color:var(--acc);color:#fff;font-weight:700}
+.pbtn:disabled{opacity:.4;cursor:not-allowed}
+.pbtn.ell{border:none;background:none;cursor:default;color:var(--dim2);min-width:20px;padding:0}
+.pinfo{margin-left:10px;color:var(--dim2);font-size:11.5px;font-family:var(--mono)}
+
+/* ───── 停止服务遮罩：服务确认下线后自动关窗（app 窗口可关，普通标签页由遮罩兜底） ───── */
+.stopmask{position:fixed;inset:0;background:rgba(17,20,28,.94);z-index:999;display:none;
+  align-items:center;justify-content:center;color:#e5e7eb;text-align:center}
+.stopmask.on{display:flex}
+.stopmask .inbox{display:flex;flex-direction:column;align-items:center;gap:9px;padding:0 30px}
+.stopmask b{font-size:17px;letter-spacing:.3px}
+.stopmask span{font-size:12.5px;color:#9ca3af;line-height:1.7}
+.stopmask .spin{width:26px;height:26px;border:3px solid rgba(255,255,255,.15);border-top-color:#818cf8;
+  border-radius:50%;animation:stopspin .8s linear infinite}
+@keyframes stopspin{to{transform:rotate(360deg)}}
 .tablewrap table{min-width:820px}
 .empty{color:var(--dim2);text-align:center;padding:32px 0;font-size:13px}
 
@@ -339,7 +395,15 @@ td.num{text-align:right}
         <h1>运行概览</h1>
         <span class="desc" id="uptime">–</span>
         <span class="acts">
-          <button class="btn primary" onclick="doCheckin(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="16" rx="2.5"/><path d="M3.5 10h17M8 3v4M16 3v4"/><path d="M9.3 15.5l2 2 3.6-3.8"/></svg>立即签到</button>
+          <span class="datewrap">
+            <button class="btn datechip" id="datechip" onclick="toggleCal(event)" title="选择要查看的日期">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="16" rx="2.5"/><path d="M3.5 10h17M8 3v4M16 3v4"/></svg>
+              <span id="datetxt">今日</span>
+              <svg class="caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+            </button>
+            <div class="calpop" id="calpop"></div>
+          </span>
+          <button class="btn primary" id="btnCheckin" onclick="doCheckin(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="16" rx="2.5"/><path d="M3.5 10h17M8 3v4M16 3v4"/><path d="M9.3 15.5l2 2 3.6-3.8"/></svg>立即签到</button>
         </span>
       </div>
       <div class="usage" id="usage"><div class="empty" style="width:100%">加载中…</div></div>
@@ -433,21 +497,21 @@ td.num{text-align:right}
       </div>
       <div class="card">
         <div class="filters">
-          <label>条数
-            <select class="btn" id="limitSel" onchange="loadRequests()">
+          <label>每页
+            <select class="btn" id="limitSel" onchange="expanded=false;page=1;renderReqTable()">
               <option value="10">10 条</option>
+              <option value="20">20 条</option>
               <option value="50">50 条</option>
               <option value="100">100 条</option>
-              <option value="500">500 条</option>
             </select></label>
-          <label>模型 <select class="btn" id="fModel" onchange="renderReqTable()"></select></label>
-          <label>账号 <select class="btn" id="fUid" onchange="renderReqTable()"></select></label>
-          <label>模式 <select class="btn" id="fMode" onchange="renderReqTable()">
+          <label>模型 <select class="btn" id="fModel" onchange="page=1;renderReqTable()"></select></label>
+          <label>账号 <select class="btn" id="fUid" onchange="page=1;renderReqTable()"></select></label>
+          <label>模式 <select class="btn" id="fMode" onchange="page=1;renderReqTable()">
             <option value="">全部</option>
             <option value="stream">流式</option>
             <option value="sync">同步</option>
           </select></label>
-          <label>状态 <select class="btn" id="fStatus" onchange="renderReqTable()">
+          <label>状态 <select class="btn" id="fStatus" onchange="page=1;renderReqTable()">
             <option value="">全部</option>
             <option value="ok">成功</option>
             <option value="4xx">4xx</option>
@@ -467,12 +531,18 @@ td.num{text-align:right}
             <tbody id="reqBody"><tr><td colspan="11" class="empty">暂无请求记录</td></tr></tbody>
           </table>
         </div>
+        <div class="pagerbar" id="pagerBar"></div>
       </div>
     </section>
 
   </div>
 </main>
 <div id="msg"></div>
+<div class="stopmask" id="stopmask"><div class="inbox">
+  <div class="spin"></div>
+  <b id="stopmaskTitle">正在停止服务…</b>
+  <span id="stopmaskNote">确认服务下线后本窗口将自动关闭</span>
+</div></div>
 
 <script>
 const LS='zcode_admin_wb_key_v2';
@@ -499,21 +569,35 @@ function card(i,k,v,s){const ic=UI[i]||['',''];
 
 /* —— 运行概览：卡片 + 趋势图 + 模型分布，数据来自 /admin/api/stats（持久化统计） —— */
 let statsData=null, distMode='today';
+let viewDate=null; // null=今日；'YYYY-MM-DD'=日历选中的历史某天（day_details 里的键）
 const PALETTE=['#4f46e5','#0ea5e9','#10b981','#f59e0b','#ef4444','#8b5cf6','#ec4899','#14b8a6','#f97316','#64748b'];
 const n2=x=>Number(x||0).toFixed(2);
 async function loadStats(){try{const d=await api('/admin/api/stats');statsData=d;renderOverview()}catch(e){}}
+// dayDataOf 取某天数据：今天走 today 汇总，历史走 day_details；无数据天返回零值骨架。
+function dayDataOf(date){
+  if(!statsData)return null;
+  if(date===statsData.today.date)return statsData.today;
+  return (statsData.day_details||{})[date]||{date,requests:0,errors:0,in_tok:0,out_tok:0,credit:0,ttfb_n:0,ttfb_avg_ms:0,models:[]};
+}
+// dayLabel 今天显示「今日」，历史显示 MM-DD。
+function dayLabel(date){return statsData&&date===statsData.today.date?'今日':date.slice(5)}
 function renderOverview(){
-  const t=statsData&&statsData.today, tot=statsData&&statsData.total;
+  const tot=statsData&&statsData.total;
+  const today=statsData?statsData.today.date:null;
+  const vd=viewDate||today;
+  const t=statsData?dayDataOf(vd):null;
+  const lbl=statsData?dayLabel(vd):'今日';
+  document.getElementById('datetxt').textContent=lbl;
   const tIn=t?t.in_tok:0, tOut=t?t.out_tok:0;
   document.getElementById('usage').innerHTML=[
-    card(2,'今日 Tokens',fmtTok(tIn+tOut),`输入 ${fmtTok(tIn)} / 输出 ${fmtTok(tOut)}`),
+    card(2,`${lbl} Tokens`,fmtTok(tIn+tOut),`输入 ${fmtTok(tIn)} / 输出 ${fmtTok(tOut)}`),
     card(3,'累计 Tokens',tot?fmtTok(tot.in_tok+tot.out_tok):'0',
       tot?`输入 ${fmtTok(tot.in_tok)} / 输出 ${fmtTok(tot.out_tok)} · 自 ${(tot.since||'').slice(5)} 起`:'–'),
-    card(1,'今日请求',t?t.requests:0,t&&t.errors?`<span class="serr">失败 ${t.errors}</span>`:'全部成功'),
-    card(4,'今日实扣积分',t?n2(t.credit):'0.00',tot?`累计 ${n2(tot.credit)}`:'累计 0.00'),
+    card(1,`${lbl} 请求`,t?t.requests:0,t&&t.errors?`<span class="serr">失败 ${t.errors}</span>`:'全部成功'),
+    card(4,`${lbl} 实扣积分`,t?n2(t.credit):'0.00',tot?`累计 ${n2(tot.credit)}`:'累计 0.00'),
     card(0,'剩余积分',totalCredits>0?totalCredits.toFixed(2):'0.00','全部账号合计'),
     card(5,'平均首字',t&&t.ttfb_avg_ms>0?(t.ttfb_avg_ms/1000).toFixed(1)+'s':'–',
-      t&&t.ttfb_n>0?`今日 ${t.ttfb_n} 次流式`:'今日暂无流式'),
+      t&&t.ttfb_n>0?`${lbl} ${t.ttfb_n} 次流式`:`${lbl}暂无流式`),
   ].join('');
   renderTrend();renderDist();
 }
@@ -524,7 +608,8 @@ function renderTrend(){
   const max=Math.max(...days.map(d=>d.in_tok+d.out_tok),1);
   el.innerHTML=days.map(d=>{
     const hIn=d.in_tok/max*100, hOut=d.out_tok/max*100;
-    return `<div class="tcol${statsData&&d.date===statsData.today.date?' today':''}"
+    const hi=statsData&&(d.date===statsData.today.date||d.date===viewDate);
+    return `<div class="tcol${hi?' today':''}"
       title="${d.date} · 请求 ${d.requests}${d.errors?`（失败 ${d.errors}）`:''} · 输入 ${d.in_tok} · 输出 ${d.out_tok} tok">
       <div class="tbars">
         <div class="tbar in" style="height:${hIn.toFixed(1)}%"></div>
@@ -539,9 +624,17 @@ function setDistMode(m){distMode=m;
   renderDist()}
 function renderDist(){
   const el=document.getElementById('dist');
-  const list=statsData?(distMode==='today'?statsData.models_today:statsData.models_total):null;
+  const tb=document.getElementById('ptabToday');
+  let list=null,lbl=distMode==='today'?'今日':'累计';
+  if(statsData){
+    if(distMode==='today'){
+      const vd=viewDate||statsData.today.date;
+      list=dayDataOf(vd).models;lbl=dayLabel(vd);
+      tb.textContent=lbl; // 「今日」tab 跟随所选日期变文案
+    }else{list=statsData.models_total;tb.textContent='今日'}
+  }
   if(!list||!list.length){
-    el.innerHTML=`<div class="empty" style="width:100%">${distMode==='today'?'今日暂无请求':'暂无数据'}</div>`;return}
+    el.innerHTML=`<div class="empty" style="width:100%">${distMode==='today'?lbl+'暂无请求':'暂无数据'}</div>`;return}
   const totalTok=list.reduce((s,m)=>s+m.in_tok+m.out_tok,0)||1;
   const totalReq=list.reduce((s,m)=>s+m.requests,0);
   let acc=0;const segs=[];
@@ -556,9 +649,70 @@ function renderDist(){
       <span class="dpct">${(tok/totalTok*100).toFixed(1)}%</span>
     </div>`}).join('');
   el.innerHTML=`<div class="donut" style="background:conic-gradient(${segs.join(',')})">
-      <div class="dcenter"><b>${totalReq}</b><span>${distMode==='today'?'今日请求':'累计请求'}</span></div>
+      <div class="dcenter"><b>${totalReq}</b><span>${distMode==='today'?lbl+'请求':'累计请求'}</span></div>
     </div><div class="dleg">${rows}</div>`;
 }
+
+/* —— 历史用量日历选择：有数据打点 · 超 30 天保留期置灰 · 未来禁用 —— */
+let calY=0,calM=0;
+function pad2(n){return String(n).padStart(2,'0')}
+function toggleCal(ev){
+  ev.stopPropagation();
+  if(!statsData)return;
+  const pop=document.getElementById('calpop');
+  if(!pop.classList.contains('on')){
+    const base=viewDate||statsData.today.date;
+    calY=+base.slice(0,4);calM=+base.slice(5,7)-1;
+    renderCal();
+  }
+  pop.classList.toggle('on');
+}
+function renderCal(){
+  const pop=document.getElementById('calpop');
+  const today=statsData.today.date;
+  // 30 天保留期下界（与后端 pruneLocked 对齐：只保留含今天在内最近 30 天）
+  const cut=new Date();cut.setDate(cut.getDate()-29);
+  const cutKey=cut.getFullYear()+'-'+pad2(cut.getMonth()+1)+'-'+pad2(cut.getDate());
+  const avail=new Set(statsData.available_dates||[]);
+  const startWd=new Date(calY,calM,1).getDay();
+  const dim=new Date(calY,calM+1,0).getDate();
+  let cells='';
+  for(let i=0;i<startWd;i++)cells+='<span></span>';
+  for(let d=1;d<=dim;d++){
+    const key=calY+'-'+pad2(calM+1)+'-'+pad2(d);
+    let cls='calcell',dis='',tip='';
+    if(key>today){cls+=' future';dis='disabled'}
+    else if(key<cutKey){cls+=' off';dis='disabled';tip='title="明细仅保留最近 30 天"'}
+    if(avail.has(key))cls+=' has';
+    if((viewDate||today)===key)cls+=' sel';
+    cells+=`<button class="${cls}" ${dis}${tip?' '+tip:''} onclick="pickDay('${key}')">${d}</button>`;
+  }
+  pop.innerHTML=`<div class="calhead">
+      <button class="calnav" onclick="calGo(-1,event)" title="上一月">‹</button>
+      <b>${calY} 年 ${calM+1} 月</b>
+      <button class="calnav" onclick="calGo(1,event)" title="下一月">›</button>
+      <button class="caltoday" onclick="pickDay('${today}')">今日</button>
+    </div>
+    <div class="calgrid">
+      ${['日','一','二','三','四','五','六'].map(w=>`<span class="calwd">${w}</span>`).join('')}
+      ${cells}
+    </div>
+    <div class="calnote">• 当天有请求 · 明细保留 30 天</div>`;
+}
+function calGo(dv,ev){ev.stopPropagation();calM+=dv;
+  if(calM<0){calM=11;calY--}if(calM>11){calM=0;calY++}renderCal()}
+function pickDay(key){
+  viewDate=key;
+  document.getElementById('calpop').classList.remove('on');
+  renderOverview();
+}
+document.addEventListener('click',e=>{
+  const pop=document.getElementById('calpop');
+  if(pop&&pop.classList.contains('on')&&!pop.contains(e.target))pop.classList.remove('on');
+});
+document.addEventListener('keydown',e=>{
+  if(e.key==='Escape'){const pop=document.getElementById('calpop');if(pop)pop.classList.remove('on')}
+});
 
 async function loadOverview(){
   try{
@@ -567,6 +721,7 @@ async function loadOverview(){
     document.getElementById('healthDot').className='dot'+(d.healthy>0?'':' err');
     document.getElementById('sideStatusTxt').textContent=(d.healthy>0?'运行中 · ':'异常 · ')+d.healthy+'/'+d.total+' 健康';
     document.getElementById('uptime').textContent='运行 '+fmtUp(d.uptime_seconds)+' · Redis '+(d.redis_mode||'noop');
+    setCheckinDone(!!d.checkin_done); // 跨天自动恢复可点；手动/定时签到后其他视图同步淡化
     document.getElementById('acctHint').textContent=`${d.healthy}/${d.total} 健康 · 冷却 ${d.cooling} · 禁用 ${d.disabled} · 满载 ${d.in_flight_full}`;
     document.getElementById('apikey').textContent=d.api_key||'(未设置)';
     allModels=d.all_models||[]; allowlist=d.allowlist||[];
@@ -635,8 +790,8 @@ async function saveAllowlist(btn){
   }finally{btn.classList.remove('loading');btn.disabled=false}
 }
 
-/* —— 请求日志：数据全量在前端，筛选纯客户端做，不动后端 —— */
-let reqsCache=[];
+/* —— 请求日志：数据全量在前端，筛选与分页纯客户端做，不动后端 —— */
+let reqsCache=[], page=1;
 function fv(id){return document.getElementById(id).value}
 function fillSel(id,vals){
   const el=document.getElementById(id),cur=el.value;
@@ -655,11 +810,43 @@ function filteredReqs(){
 }
 function resetFilters(){
   ['fModel','fUid','fMode','fStatus'].forEach(id=>document.getElementById(id).value='');
-  renderReqTable();
+  page=1;renderReqTable();
+}
+// pageSize 每页条数：双击展开态一页全显；否则取「每页」下拉。
+function pageSize(){
+  if(expanded)return Math.max(reqsCache.length,1);
+  return +document.getElementById('limitSel').value||10;
+}
+// pageList 分页按钮序列：首/末页常驻，当前页前后各留一页，其余折叠为省略号。
+function pageList(cur,total){
+  if(total<=7)return Array.from({length:total},(_,i)=>i+1);
+  if(cur<=4)return [1,2,3,4,5,'…',total];
+  if(cur>=total-3)return [1,'…',total-4,total-3,total-2,total-1,total];
+  return [1,'…',cur-1,cur,cur+1,'…',total];
+}
+function goToPage(p){page=p;renderReqTable()}
+function renderPager(total){
+  const bar=document.getElementById('pagerBar');
+  if(expanded||total<=1){bar.innerHTML='';return}
+  let html=`<button class="pbtn" ${page===1?'disabled':''} onclick="goToPage(1)" title="第一页">«</button>`+
+    `<button class="pbtn" ${page===1?'disabled':''} onclick="goToPage(${page-1})" title="上一页">‹</button>`;
+  for(const it of pageList(page,total)){
+    html+=it==='…'?'<span class="pbtn ell">…</span>'
+      :`<button class="pbtn${it===page?' on':''}" onclick="goToPage(${it})">${it}</button>`;
+  }
+  html+=`<button class="pbtn" ${page===total?'disabled':''} onclick="goToPage(${page+1})" title="下一页">›</button>`+
+    `<button class="pbtn" ${page===total?'disabled':''} onclick="goToPage(${total})" title="最后一页">»</button>`+
+    `<span class="pinfo">第 ${page} / ${total} 页</span>`;
+  bar.innerHTML=html;
 }
 function renderReqTable(){
   const list=filteredReqs();
-  const rows=list.map(r=>`<tr>
+  const ps=Math.max(1,pageSize());
+  const total=Math.max(1,Math.ceil(list.length/ps));
+  // 5s 自动刷新/筛选后数据变少时钳回有效页，避免空页
+  if(page>total)page=total;
+  if(page<1)page=1;
+  const rows=list.slice((page-1)*ps,page*ps).map(r=>`<tr>
       <td class="dim">${r.seq}</td><td class="dim">${r.time}</td><td>${esc(r.model)}</td><td><span class="mode">${r.mode}</span></td>
       <td><span class="badge st-${String(r.status)[0]}">${r.status}</span></td><td class="dim">${r.uid||'-'}</td>
       <td class="num">${r.ttfb_ms<0?'-':fmtSec(r.ttfb_ms)}</td>
@@ -668,12 +855,13 @@ function renderReqTable(){
       <td class="num">${r.credit<0?'-':r.credit}</td>
       <td class="num">${(r.total_ms/1000).toFixed(1)}s</td></tr>`).join('');
   document.getElementById('reqBody').innerHTML=rows||'<tr><td colspan="11" class="empty">暂无请求记录</td></tr>';
+  renderPager(total);
   document.getElementById('fCount').textContent=`${list.length}/${reqsCache.length} 条 · 5 秒自动刷新 · 环形缓冲 500 条跨重启保留`;
 }
 async function loadRequests(){
   try{
-    const limit=expanded?document.getElementById('limitSel').value:10;
-    const d=await api('/admin/api/requests?limit='+limit);
+    // 固定拉全量（环形缓冲上限 500）：翻页/切每页条数在前端即时完成，不再回头请求
+    const d=await api('/admin/api/requests?limit=500');
     reqsCache=d.requests||[];
     rebuildFilterOptions();
     renderReqTable();
@@ -768,11 +956,58 @@ async function deleteExtraKey(id){
   const d=await api('/admin/api/keys/delete',{method:'POST',body:JSON.stringify({id})});
   if(d.ok){toast('密钥已删除');loadOverview()}else toast(d.msg||'删除失败');
 }
-async function doCheckin(btn){btn.classList.add('loading');btn.disabled=true;
-  try{const d=await api('/admin/api/checkin',{method:'POST'});toast(d.ok?'签到已触发，几秒后自动刷新':d.msg);setTimeout(loadAll,4000)}
-  finally{btn.classList.remove('loading');btn.disabled=false}}
+// setCheckinDone 按后端 checkin_done 同步「立即签到」按钮三态：
+// 正常（可点） / 签到中（busy，不覆盖） / 今日已签到（淡化+禁用）。
+function setCheckinDone(done){
+  const b=document.getElementById('btnCheckin');
+  if(!b||b.dataset.busy==='1')return;
+  b.disabled=!!done;
+  b.classList.toggle('done',!!done);
+  b.innerHTML=done
+    ?'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>今日已签到'
+    :'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="16" rx="2.5"/><path d="M3.5 10h17M8 3v4M16 3v4"/><path d="M9.3 15.5l2 2 3.6-3.8"/></svg>立即签到';
+}
+async function doCheckin(btn){
+  if(btn.dataset.busy==='1')return;
+  btn.dataset.busy='1';btn.disabled=true;btn.classList.add('loading');
+  try{
+    // 接口为同步执行：响应返回时签到已完成，无需再等轮询
+    const d=await api('/admin/api/checkin',{method:'POST'});
+    toast(d.ok?'签到完成':(d.msg||'签到失败'));
+  }catch(e){toast('签到请求失败')}
+  btn.dataset.busy='0';
+  btn.classList.remove('loading');
+  loadAll(); // 立即刷新：setCheckinDone 依最新 checkin_done 置态（有成功→淡化；全失败→恢复可重试）
+}
 async function doRestart(){if(!confirm('重启服务？（看门狗会自动拉起，约 5 秒）'))return;await api('/admin/api/restart',{method:'POST'});toast('重启中…');setTimeout(()=>location.reload(),6000)}
-async function doStop(){if(!confirm('确定要停止服务吗？\n停止后需手动运行 start-workbuddy.cmd 重新启动。'))return;const d=await api('/admin/api/stop',{method:'POST'});toast(d.ok?'停止中…服务即将关闭（用 start-workbuddy.cmd 恢复）':d.msg)}
+// doStop 停止服务：确认后端真正下线（healthz 连不上）即自动关闭本窗口。
+// Chrome --app 应用窗口可被 window.close() 关闭；普通标签页会被浏览器拦截，
+// 由遮罩兜底提示手动关闭。
+async function doStop(){
+  if(!confirm('确定要停止服务吗？\n停止后本窗口将自动关闭；需手动运行 start-workbuddy.cmd 重新启动。'))return;
+  try{await api('/admin/api/stop',{method:'POST'})}catch(e){}
+  const mask=document.getElementById('stopmask');
+  mask.classList.add('on');
+  const t0=Date.now();
+  const tick=()=>{
+    fetch('/healthz',{cache:'no-store'}).then(r=>{
+      // 仍有应答：stop-helper 的延迟窗口，继续等；超 20s 视为停止失败
+      if(Date.now()-t0>20000){
+        document.getElementById('stopmaskTitle').textContent='服务未能停止';
+        document.getElementById('stopmaskNote').innerHTML='请查看服务日志排查，或改用 stop-workbuddy.cmd<br><b style="cursor:pointer" onclick="location.reload()">返回页面</b>';
+        document.querySelector('#stopmask .spin').style.display='none';
+        return;
+      }
+      setTimeout(tick,400);
+    }).catch(()=>{
+      // 连接被拒 = 服务进程已退出：关窗（多次尝试，普通标签页关不掉则遮罩兜底）
+      document.getElementById('stopmaskTitle').textContent='服务已停止';
+      document.getElementById('stopmaskNote').textContent='窗口即将自动关闭；如未关闭请手动关闭（start-workbuddy.cmd 可重新启动）';
+      [0,800,2000,4000].forEach(d=>setTimeout(()=>{try{window.close()}catch(e){}},d));
+    });
+  };
+  tick();
+}
 async function loadAll(btn){
   if(btn){btn.classList.add('loading');btn.disabled=true}
   try{loadOverview();loadRequests();loadStats()}

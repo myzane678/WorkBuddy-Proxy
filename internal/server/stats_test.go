@@ -2,9 +2,13 @@
 package server
 
 import (
+	"encoding/json"
+	"net/http/httptest"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"workbuddy2api/internal/auth"
 )
 
 // newTestStats 独立实例：开启 chatLog（TestMain 默认关），落盘指向临时目录。
@@ -83,5 +87,49 @@ func TestStatsPrune(t *testing.T) {
 	s.mu.Unlock()
 	if len(s.Days) != statsKeepDays {
 		t.Fatalf("修剪后天数错误: %d", len(s.Days))
+	}
+}
+
+// TestAdminStatsHistoryDayDetails /admin/api/stats 必须暴露 available_dates 与 day_details
+// （概览页日历选择历史日期的数据源），且 day_details 带模型明细与首字均值。
+func TestAdminStatsHistoryDayDetails(t *testing.T) {
+	s := newTestStats(t)
+	today := time.Now().Format("2006-01-02")
+	yesterday := time.Now().AddDate(0, 0, -1).Format("2006-01-02")
+	s.record("m1", 200, 100, 10, 0.5, 800)
+	s.mu.Lock()
+	s.Days[yesterday] = &dayStat{Date: yesterday, Requests: 2, InTok: 7, OutTok: 3,
+		Models: map[string]*modelStat{"m1": {Requests: 2, InTok: 7, OutTok: 3}}}
+	s.mu.Unlock()
+
+	old := stats
+	stats = s
+	defer func() { stats = old }()
+	h := NewHandler(Config{Pool: testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at1", ExpiresAt: 9999999999})})
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/admin/api/stats", nil))
+	if rec.Code != 200 {
+		t.Fatalf("code=%d body=%s", rec.Code, rec.Body)
+	}
+	var resp struct {
+		AvailableDates []string             `json:"available_dates"`
+		DayDetails     map[string]dayDetail `json:"day_details"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("resp not json: %v", err)
+	}
+	if len(resp.AvailableDates) != 2 || resp.AvailableDates[0] != yesterday || resp.AvailableDates[1] != today {
+		t.Fatalf("available_dates 错误: %v", resp.AvailableDates)
+	}
+	yd, ok := resp.DayDetails[yesterday]
+	if !ok || yd.Requests != 2 || yd.InTok != 7 || yd.OutTok != 3 {
+		t.Fatalf("day_details[%s] 错误: %+v", yesterday, yd)
+	}
+	if len(yd.Models) != 1 || yd.Models[0].Model != "m1" || yd.Models[0].Requests != 2 {
+		t.Fatalf("day_details 模型明细错误: %+v", yd.Models)
+	}
+	td := resp.DayDetails[today]
+	if td.TtfbN != 1 || td.TtfbAvgMs != 800 {
+		t.Fatalf("day_details[%s] 首字统计错误: %+v", today, td)
 	}
 }

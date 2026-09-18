@@ -89,6 +89,7 @@ func (h *Handler) adminOverview(w http.ResponseWriter, r *http.Request) {
 	if adminExt.Scheduler != nil {
 		rep, next := adminExt.Scheduler.CheckinSnapshot()
 		resp["checkin"] = rep
+		resp["checkin_done"] = rep.CheckedInToday()
 		resp["checkin_next"] = next.Format("01-02 15:04")
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -117,13 +118,16 @@ func (h *Handler) adminRequests(w http.ResponseWriter, r *http.Request) {
 }
 
 // adminCheckin 立即执行一轮签到 + 余额刷新 + 解冻。
+// 同步执行（此前为 fire-and-forget + 前端 4s 轮询）：响应返回时签到已完成，
+// 前端拿到结果即可即时把按钮置为「今日已签到」，实时性从"秒级轮询发现"提为"完成即知"。
+// 上游调用最坏数秒，本机管理接口可接受。
 func (h *Handler) adminCheckin(w http.ResponseWriter, r *http.Request) {
 	if adminExt.Scheduler == nil {
 		writeJSON(w, http.StatusNotImplemented, map[string]any{"ok": false, "msg": "scheduler unavailable"})
 		return
 	}
-	go adminExt.Scheduler.RunCheckinNow()
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "msg": "checkin triggered"})
+	adminExt.Scheduler.RunCheckinNow()
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "msg": "checkin done"})
 }
 
 // adminRestart 延迟退出，看门狗 3s 内自动拉起。

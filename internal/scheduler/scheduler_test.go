@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -105,6 +106,62 @@ func TestRunCheckinReenablesCoolingAccount(t *testing.T) {
 	}
 	if st.Credits != 500 {
 		t.Errorf("credits=%d want 500", st.Credits)
+	}
+}
+
+// TestCheckedInToday "今日已签到"判定：今天且至少一账号成功 → true；
+// 昨天的记录 → false；今天但全失败 → false（允许重试）。
+func TestCheckedInToday(t *testing.T) {
+	today := time.Now().Format("2006-01-02")
+	yesterday := time.Now().AddDate(0, 0, -1).Format("2006-01-02")
+	cases := []struct {
+		name string
+		rep  CheckinReport
+		want bool
+	}{
+		{"今天有成功", CheckinReport{Date: today, Results: []CheckinResult{{UID: "u1", OK: true}}}, true},
+		{"上游幂等已签到也算成功", CheckinReport{Date: today, Results: []CheckinResult{{UID: "u1", OK: true, Msg: "今天已签到"}}}, true},
+		{"昨天的记录", CheckinReport{Date: yesterday, Results: []CheckinResult{{UID: "u1", OK: true}}}, false},
+		{"今天但全失败", CheckinReport{Date: today, Results: []CheckinResult{{UID: "u1", OK: false, Msg: "boom"}}}, false},
+		{"无日期字段（旧落盘文件）", CheckinReport{Results: []CheckinResult{{UID: "u1", OK: true}}}, false},
+		{"今天但无结果", CheckinReport{Date: today}, false},
+	}
+	for _, c := range cases {
+		if got := c.rep.CheckedInToday(); got != c.want {
+			t.Errorf("%s: got %v want %v", c.name, got, c.want)
+		}
+	}
+}
+
+// TestRunCheckinMarksDateAndDone 集成：签到一轮后 Date 落 today，CheckedInToday=true。
+func TestRunCheckinMarksDateAndDone(t *testing.T) {
+	// 先清掉更早测试落盘的残留（persistState 是 cwd 相对路径，包内测试会写
+	// internal/scheduler/data/checkin-state.json，New→loadState 读到会让"未签到"断言误判）。
+	_ = os.Remove((&Scheduler{}).statePath())
+	f := &fakeUpstream{resourceRemain: 100}
+	srv := f.server()
+	defer srv.Close()
+
+	p := pool.New("")
+	p.Add(&auth.Auth{UID: "u1", AccessToken: "at", RefreshToken: "rt", ExpiresAt: 9999999999})
+	s := New(Config{
+		Pool: p,
+		Upstream: &upstream.Client{
+			HTTP:            srv.Client(),
+			ChatBaseCN:      srv.URL,
+			BillingBaseCN:   srv.URL,
+			ChatBaseGlobal:  srv.URL,
+			BillingBaseGlob: srv.URL,
+		},
+	})
+	rep, _ := s.CheckinSnapshot()
+	if rep.CheckedInToday() {
+		t.Fatal("未签到时不应报告已签到")
+	}
+	s.RunCheckinNow()
+	rep, _ = s.CheckinSnapshot()
+	if !rep.CheckedInToday() {
+		t.Fatalf("签到后应报告已签到: date=%q results=%+v", rep.Date, rep.Results)
 	}
 }
 

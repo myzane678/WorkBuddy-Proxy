@@ -40,9 +40,13 @@ If Not Healthy() Then
   If Not ok Then WScript.Quit 1
 End If
 
-' Chrome 应用窗口打开（独立无地址栏，类桌面应用）
+' Chrome app window (frameless, desktop-app like).
+' Isolated user-data-dir: never merges with the user's daily Chrome instance.
+' --workbuddy-admin-window is a marker flag for stop-helper.ps1 to close this
+' window at OS level when stopping the service (Chrome ignores unknown flags
+' but keeps them on the command line, so process query can match it).
 If chrome <> "" Then
-  sh.Run """" & chrome & """ --app=" & ADMIN, 1, False
+  sh.Run """" & chrome & """ --user-data-dir=""" & BASE & "\data\admin-profile"" --workbuddy-admin-window --no-first-run --no-default-browser-check --app=" & ADMIN, 1, False
 Else
   sh.Run "rundll32.exe url.dll,FileProtocolHandler " & ADMIN, 0, False
 End If

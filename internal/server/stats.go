@@ -224,6 +224,19 @@ type dayAgg struct {
 	Credit   float64 `json:"credit"`
 }
 
+// dayDetail 单日完整明细（含模型分布），供概览页日历选择历史日期后整体切换。
+type dayDetail struct {
+	Date      string     `json:"date"`
+	Requests  int64      `json:"requests"`
+	Errors    int64      `json:"errors"`
+	InTok     int64      `json:"in_tok"`
+	OutTok    int64      `json:"out_tok"`
+	Credit    float64    `json:"credit"`
+	TtfbN     int64      `json:"ttfb_n"`
+	TtfbAvgMs int64      `json:"ttfb_avg_ms"`
+	Models    []modelAgg `json:"models"`
+}
+
 // adminStats 概览图表数据：今日汇总、累计汇总、最近 7 天趋势、模型分布（今日+累计）。
 func (h *Handler) adminStats(w http.ResponseWriter, r *http.Request) {
 	stats.mu.Lock()
@@ -232,20 +245,35 @@ func (h *Handler) adminStats(w http.ResponseWriter, r *http.Request) {
 	todayKey := time.Now().Format("2006-01-02")
 	td := stats.Days[todayKey]
 	today := map[string]any{"date": todayKey, "requests": int64(0), "errors": int64(0),
-		"in_tok": int64(0), "out_tok": int64(0), "credit": 0.0, "ttfb_avg_ms": int64(0)}
+		"in_tok": int64(0), "out_tok": int64(0), "credit": 0.0, "ttfb_n": int64(0), "ttfb_avg_ms": int64(0)}
 	if td != nil {
 		avg := int64(0)
 		if td.TTFBN > 0 {
 			avg = td.TTFBSum / td.TTFBN
 		}
 		today = map[string]any{"date": td.Date, "requests": td.Requests, "errors": td.Errors,
-			"in_tok": td.InTok, "out_tok": td.OutTok, "credit": td.Credit, "ttfb_avg_ms": avg}
+			"in_tok": td.InTok, "out_tok": td.OutTok, "credit": td.Credit,
+			"ttfb_n": td.TTFBN, "ttfb_avg_ms": avg}
 	}
 	dates := make([]string, 0, len(stats.Days))
 	for k := range stats.Days {
 		dates = append(dates, k)
 	}
 	sort.Strings(dates)
+	// available_dates + day_details：天桶全量（30 天内）按日历选择历史日期用。
+	// 本地单用户接口，一次带全量换前端切换零延迟；体积 = 天数 × 模型数，几十 KB 量级。
+	allDates := dates
+	dayDetails := make(map[string]dayDetail, len(allDates))
+	for _, k := range allDates {
+		d := stats.Days[k]
+		avg := int64(0)
+		if d.TTFBN > 0 {
+			avg = d.TTFBSum / d.TTFBN
+		}
+		dayDetails[k] = dayDetail{Date: k, Requests: d.Requests, Errors: d.Errors,
+			InTok: d.InTok, OutTok: d.OutTok, Credit: d.Credit,
+			TtfbN: d.TTFBN, TtfbAvgMs: avg, Models: topModelsAgg(d.Models)}
+	}
 	if len(dates) > 7 {
 		dates = dates[len(dates)-7:]
 	}
@@ -272,11 +300,13 @@ func (h *Handler) adminStats(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"today":        today,
-		"total":        stats.Total,
-		"days":         days,
-		"models_today": topModels(td),
-		"models_total": topModelsAgg(totalModels),
+		"today":           today,
+		"total":           stats.Total,
+		"days":            days,
+		"models_today":    topModels(td),
+		"models_total":    topModelsAgg(totalModels),
+		"available_dates": allDates,
+		"day_details":     dayDetails,
 	})
 }
 

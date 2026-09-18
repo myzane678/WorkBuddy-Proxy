@@ -4,6 +4,7 @@ package server
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -246,9 +247,37 @@ func (h *Handler) fetchDynamicModels() []upstream.ModelInfo {
 	return infos
 }
 
+// maxBodyBytes 请求体上限。旧值 8<<20 会静默截断超限请求体：JSON 变成半截 →
+// 解析失败 → model 字段读不到 → 被白名单门禁误报成 403 model_not_allowed /
+// 400 model is required，把「请求体过大」伪装成「账号或白名单有问题」。
+// 实测依据（2026-09-18）：
+//   - 上游 copilot.tencent.com 接受 ≥96 MiB 请求体（1/8/16/24/32/48/64/96 MiB 全部 200）；
+//   - 本代理内存随 body 线性增长：8 MiB→105 MB / 32 MiB→266 MB / 64 MiB→454 MB；
+//   - agent 场景会把截图以 base64 内联进请求体，实测约 3.7 MB/张（1080x2400 长截图），
+//     观察到的失败样本 13 张图 base64 后约 8.2 MiB，恰好越过旧的 8 MiB 上限——
+//     纯文本会话永远碰不到该边界，这正是「换个会话就能用」的原因。
+// 取 32 MiB：覆盖「十几张高清截图」的真实会话并留约 4 倍余量，单请求内存峰值 ~270 MB（本机单用户代理可接受）。
+const maxBodyBytes = 32 << 20
+
 func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(io.LimitReader(r.Body, 8<<20))
+	// MaxBytesReader 超限时返回 *http.MaxBytesError，而不是像 LimitReader 那样
+	// 静默截断——截断会让下游把「请求体过大」误诊成 model 缺失。
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+	body, err := io.ReadAll(r.Body)
 	if err != nil {
+		var mbe *http.MaxBytesError
+		if errors.As(err, &mbe) {
+			// 请求级统计：与下方正常路径一致地记一行表格日志 + /admin 请求日志。
+			// 注意 body 已被截断、无法解析 model，以空 body 构造（model 列记 "-"）。
+			st := newChatStat(time.Now(), nil, false)
+			defer st.done()
+			st.status = http.StatusRequestEntityTooLarge
+			// 显式落一行 stderr：旧行为下这类请求完全静默，是排查时最大的盲区。
+			log.Printf("chat: request body over limit (%d bytes) - rejected 413", mbe.Limit)
+			writeOpenAIError(w, http.StatusRequestEntityTooLarge, "request_too_large",
+				fmt.Sprintf("request body exceeds limit of %d bytes", maxBodyBytes))
+			return
+		}
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", "read body: "+err.Error())
 		return
 	}

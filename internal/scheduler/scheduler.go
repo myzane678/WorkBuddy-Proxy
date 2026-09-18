@@ -29,8 +29,24 @@ type CheckinResult struct {
 // CheckinReport 一轮签到（手动或定时）的汇总。
 type CheckinReport struct {
 	Time    string          `json:"time"`
-	Trigger string          `json:"trigger"` // manual | scheduled
+	Date    string          `json:"date,omitempty"` // 本轮签到日期 YYYY-MM-DD（判定"今日已签到"用）
+	Trigger string          `json:"trigger"`        // manual | scheduled
 	Results []CheckinResult `json:"results"`
+}
+
+// CheckedInToday 报告"今天是否已签到"：最近一轮签到发生在今天且至少一个账号成功。
+// OK=true 覆盖"签到成功"与上游幂等返回的"今天已签到"两种；全失败时不视为已签到，
+// 允许用户再点重试（重跑一轮时已签的号上游返回已签到，仍是成功态）。
+func (r CheckinReport) CheckedInToday() bool {
+	if r.Date == "" || r.Date != time.Now().Format("2006-01-02") {
+		return false
+	}
+	for _, res := range r.Results {
+		if res.OK {
+			return true
+		}
+	}
+	return false
 }
 
 // Config 调度器依赖。
@@ -115,7 +131,7 @@ func (s *Scheduler) RunCheckinNow() {
 // runCheckin 对所有账号执行签到 + 余额刷新 + 解冻，并记录结果供 /admin 展示。
 // 冷却中的账号也参与（签到就是为了解冻它们）；禁用的跳过。
 func (s *Scheduler) runCheckin(trigger string) {
-	rep := CheckinReport{Time: time.Now().Format("15:04:05"), Trigger: trigger}
+	rep := CheckinReport{Time: time.Now().Format("15:04:05"), Date: time.Now().Format("2006-01-02"), Trigger: trigger}
 	for _, st := range s.cfg.Pool.List() {
 		if st.Disabled {
 			continue

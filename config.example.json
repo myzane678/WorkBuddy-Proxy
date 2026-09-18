@@ -4,6 +4,7 @@
   "auth_dir": "./auths",
   "state_file": "./data/state.json",
   "region": "cn",
+  "model_allowlist": [],
   "cooldown": {
     "soft_rate": "60s"
   },

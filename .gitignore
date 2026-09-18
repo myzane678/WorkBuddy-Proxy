@@ -11,6 +11,9 @@ data/
 /signin_bin
 # Windows build artifacts
 /*.exe
+/*.exe.bak*
+# 编辑器产物
+PowerShellEditorServices.json
 
 # Config with secrets (use config.example.json)
 config.json

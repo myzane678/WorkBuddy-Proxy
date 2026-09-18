@@ -18,7 +18,7 @@
 - 📡 **流式 + 非流式** — 上游 SSE 透传；非流式本地聚合（上游拒绝非流式请求）
 - ⏰ **定时签到** — 每日 09:00 / 21:00 自动签到 + 积分查询，积分耗尽账号次日 04:00 自动恢复
 - 📊 **积分监控** — `/admin` 控制台一键查询全部账号剩余/总量/百分比，剩余积分随每笔请求准实时扣减（签到时对账校正）
-- 📈 **用量统计** — 今日/累计 Tokens、请求、实扣积分持久化统计（跨重启保留）+ 7 天趋势图 + 模型分布环形图
+- 📈 **用量统计** — 今日/累计 Tokens、请求、实扣积分持久化统计（跨重启保留）+ 7 天趋势图 + 模型分布环形图；页头日历可回看最近 30 天任一天用量（明细保留 30 天）
 - 🚀 **一键启动** — `launch.vbs` 桌面快捷方式：无黑窗自动拉起服务，Chrome 应用窗口打开控制台
 - 🔑 **登录工具** — `login-workbuddy.ps1` 交互式登录（Windows 原生），落盘即生效
 - 🏗 **Docker 部署** — 一键 `docker compose up`，healthcheck 常驻
@@ -91,6 +91,7 @@ curl -sN http://localhost:7863/v1/chat/completions \
   "auth_dir": "./auths",
   "state_file": "./data/state.json",
   "region": "cn",
+  "model_allowlist": [],
   "cooldown": {
     "soft_rate": "60s"
   },
@@ -209,10 +210,13 @@ Disabled ←────┘ (session 死亡，永久)
 
 - **防雪崩**：上游 4xx/5xx 轮转重试（不直接返回），404 短冷却 60s 不累计失败
 - **错误分流**：网络层错误不计失败（避免抖动连坐）；HTTP 5xx 喂单一连续失败计数器，达 `breaker_threshold`（默认 3）触发指数退避熔断
+- **请求体上限**：`maxBodyBytes` = 32 MiB，超限由 `http.MaxBytesReader` 返回 **413 `request_too_large`**
+  并落 stderr 日志。**勿改回 `io.LimitReader`**——它会静默截断超限请求体，使 JSON 变半截、
+  被下游误报成「model 缺失 / 白名单错误」（贴多张大图的会话必踩，排查代价极高）
 - **请求日志**：表格日志（seq/TTFB/uid/tokens/latency）便于排查慢请求
 - **连接池**：`MaxIdleConnsPerHost=20` 减少 TLS 握手
 - **凭证续期**：token 临近过期自动 refresh，失败禁用账号
-- **状态持久化**：`data/state.json` dirty flag + 5s 周期异步落盘，进程退出前强制 flush
+- **状态持久化**：`data/state.json` dirty flag + 5s 周期异步落盘，进程退出 `Pool.Close()` 停 flusher 并补一次落盘
 - **防惊群**：100ms 窗口内不重复选中同一账号（高并发时打散热点）
 
 ## 开发
@@ -221,10 +225,13 @@ Disabled ←────┘ (session 死亡，永久)
 
 ```bash
 go build ./...
-go test ./... -count=20  # 20 次全绿（无 flake）
+go test ./... -count=20  # 20 次全绿（pool 已修 TestAutoFlush 偶发 flake，高频重复验证过）
 go vet ./...
-gofmt -l .  # 应为空
 ```
+
+> **关于 `gofmt -l .`**：本仓库文件为 CRLF 行尾（`core.autocrlf=true` 的 Windows 工作区），
+> `gofmt -l .` 会把全部 `.go` 文件标记为需重写——这是行尾格式差异、**非代码格式缺陷**：
+> 将任一文件转为 LF 后 `gofmt -l` 即为空。如需本地校验格式，先把文件行尾转成 LF。
 
 ### 代码结构
 

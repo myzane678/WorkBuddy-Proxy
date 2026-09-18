@@ -176,6 +176,10 @@ type Pool struct {
 	stateFp string
 	dirty   atomic.Bool // 内存有变更待落盘
 
+	// stopFlush 关闭信号：Close 后后台 flusher goroutine 退出（New 时初始化，
+	// 无 flusher 的池 Close 也安全——空 channel close 无副作用）。
+	stopFlush chan struct{}
+
 	// store 池状态快照镜像（redisstore.Store）；nil = 无需镜像（未配置 Redis / Noop 之外也可能 nil）。
 	// SaveState/LoadState 经它接线，与本地 state.json 并存作启动恢复备份。
 	store StoreSnapshotter
@@ -221,11 +225,13 @@ const (
 	defaultIdleWeightMax     = 5.0
 )
 
-// New 构建池；stateFp 非空时尝试加载旧状态，并启动后台周期性落盘 goroutine。
+// New 构建池；stateFp 非空时尝试加载旧状态，并启动后台周期性落盘 goroutine
+// （退出时须 Close 停止并补一次落盘）。
 func New(stateFp string) *Pool {
 	p := &Pool{
 		byUID:              map[string]*entry{},
 		stateFp:            stateFp,
+		stopFlush:          make(chan struct{}),
 		breakerThreshold:   defaultBreakerThreshold,
 		breakerCooldown:    defaultBreakerCooldown,
 		breakerCooldownMax: defaultBreakerCooldownMax,
@@ -376,12 +382,17 @@ func (p *Pool) startFlusher() {
 	go func() {
 		t := time.NewTicker(interval)
 		defer t.Stop()
-		for range t.C {
-			p.mu.Lock()
-			if p.dirty.Swap(false) {
-				p.saveLocked()
+		for {
+			select {
+			case <-t.C:
+				p.mu.Lock()
+				if p.dirty.Swap(false) {
+					p.saveLocked()
+				}
+				p.mu.Unlock()
+			case <-p.stopFlush:
+				return
 			}
-			p.mu.Unlock()
 		}
 	}()
 }
@@ -393,6 +404,18 @@ func (p *Pool) Flush() {
 		p.saveLocked()
 	}
 	p.mu.Unlock()
+}
+
+// Close 停止后台 flusher 并把内存状态同步落盘。幂等（重复调用安全）。
+// 进程退出与测试回收都要走这里：flusher 若不停止，会在测试的 t.TempDir() 清理后
+// 仍向目录写 state.json，与 RemoveAll 竞争（偶发 TempDir cleanup 失败的根源）。
+func (p *Pool) Close() {
+	select {
+	case <-p.stopFlush: // 已关闭
+	default:
+		close(p.stopFlush)
+	}
+	p.Flush()
 }
 
 // Add 加入账号；已存在则保留原状态、更新凭证（upsert 单账号，不影响其他账号）。

@@ -57,8 +57,10 @@ if exist "%ProgramFiles%\Google\Chrome\Application\chrome.exe" set "CHROME=%Prog
 if not defined CHROME if exist "%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe" set "CHROME=%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe"
 if not defined CHROME if exist "%LocalAppData%\Google\Chrome\Application\chrome.exe" set "CHROME=%LocalAppData%\Google\Chrome\Application\chrome.exe"
 if defined CHROME (
-    echo [*] Opening admin page in Google Chrome...
-    start "" "%CHROME%" "http://127.0.0.1:8091/admin"
+    echo [*] Opening admin window in Google Chrome...
+    REM Same marker as launch.vbs: stop-helper.ps1 closes this window by
+    REM command-line feature when the service stops (keep ASCII only here).
+    start "" "%CHROME%" --user-data-dir="E:\work\workbuddy2api\data\admin-profile" --workbuddy-admin-window --no-first-run --no-default-browser-check --app=http://127.0.0.1:8091/admin
 ) else (
     echo [*] Chrome not found, opening with default browser...
     start "" "http://127.0.0.1:8091/admin"

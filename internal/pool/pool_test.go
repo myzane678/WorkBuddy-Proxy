@@ -313,10 +313,12 @@ func TestCooldownPersists(t *testing.T) {
 	dir := t.TempDir()
 	fp := filepath.Join(dir, "state.json")
 	p := New(fp)
+	defer p.Close()
 	p.Add(&auth.Auth{UID: "u1"})
 	p.Cooldown("u1", CoolHard, time.Hour, "余额不足")
 	p.Flush() // 状态变更走 dirty 标志，落盘由 Flush / 后台 goroutine 负责
 	p2 := New(fp)
+	defer p2.Close()
 	p2.Add(&auth.Auth{UID: "u1"})
 	st, ok := p2.Status("u1")
 	if !ok || !st.Cooling || st.Reason != "余额不足" {
@@ -328,10 +330,12 @@ func TestDisablePersists(t *testing.T) {
 	dir := t.TempDir()
 	fp := filepath.Join(dir, "state.json")
 	p := New(fp)
+	defer p.Close()
 	p.Add(&auth.Auth{UID: "u1"})
 	p.Disable("u1", "12153 session dead")
 	p.Flush()
 	p2 := New(fp)
+	defer p2.Close()
 	p2.Add(&auth.Auth{UID: "u1"})
 	if p2.Pick() != nil {
 		t.Fatal("disabled account picked after reload")
@@ -518,12 +522,14 @@ func TestCoolKindPersistsAcrossReload(t *testing.T) {
 	dir := t.TempDir()
 	fp := filepath.Join(dir, "state.json")
 	p := New(fp)
+	defer p.Close()
 	p.Add(&auth.Auth{UID: "u1"})
 	p.Cooldown("u1", CoolHard, time.Hour, "余额不足")
 	p.Flush()
 
 	// 旧文件缺新字段时零值 → 冷却应仍工作（向后兼容）。
 	p2 := New(fp)
+	defer p2.Close()
 	p2.Add(&auth.Auth{UID: "u1"})
 	st, ok := p2.Status("u1")
 	if !ok || !st.Cooling {
@@ -538,6 +544,7 @@ func TestStateRoundTripExtendedFields(t *testing.T) {
 	dir := t.TempDir()
 	fp := filepath.Join(dir, "state.json")
 	p := New(fp)
+	defer p.Close()
 	p.Add(&auth.Auth{UID: "u1"})
 	p.Cooldown("u1", CoolHard, time.Hour, "余额不足")
 	p.NoteSuccess("u1") // successCount=1，last_success 非零
@@ -561,6 +568,7 @@ func TestStateRoundTripExtendedFields(t *testing.T) {
 
 	// 重载后字段保留
 	p2 := New(fp)
+	defer p2.Close()
 	p2.Add(&auth.Auth{UID: "u1"})
 	st, ok := p2.Status("u1")
 	if !ok {
@@ -586,6 +594,7 @@ func TestLoadLegacyErrCountMigratesToErrTotal(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := New(fp)
+	defer p.Close()
 	p.Add(&auth.Auth{UID: "u1"})
 	st, ok := p.Status("u1")
 	if !ok {
@@ -600,6 +609,7 @@ func TestLoadLegacyErrCountMigratesToErrTotal(t *testing.T) {
 		t.Fatal(err)
 	}
 	p2 := New(fp)
+	defer p2.Close()
 	p2.Add(&auth.Auth{UID: "u1"})
 	if st2, _ := p2.Status("u1"); st2.ErrTotal != 9 {
 		t.Errorf("err_total=%d want 9 (new field wins over legacy)", st2.ErrTotal)
@@ -663,15 +673,17 @@ func TestCooldownUntilTomorrow4AM(t *testing.T) {
 	if st.Reason != "余额不足" {
 		t.Errorf("reason=%q", st.Reason)
 	}
-	// 冷却截止必须是"此刻之后的最近一个 04:00"：晚于 now、距今不超过 24h。
+	// 冷却截止必须是"此刻之后的最近一个 04:00"：晚于 now。
+	// 距今上限 28h（24h+4h）：now∈[00:00,04:00) 时"次日 04:00"相距 24~28h，写死 24h 会在
+	// 每天午夜到凌晨四点之间跑测试时必失败（2026-09-19 00:0x 实测踩中）。
 	if st.Until.Before(after) {
 		t.Errorf("until %v is in the past (call span %v..%v)", st.Until, before, after)
 	}
 	if st.Until.Hour() != 4 {
 		t.Errorf("until hour=%d want 4", st.Until.Hour())
 	}
-	if d := st.Until.Sub(after); d > 24*time.Hour {
-		t.Errorf("until %v is more than 24h out: %v", st.Until, d)
+	if d := st.Until.Sub(after); d > 28*time.Hour {
+		t.Errorf("until %v is more than 28h out: %v", st.Until, d)
 	}
 	// 全冷却时余额耗尽（hard）号不参与兜底 → 返回 nil（等签到恢复）。
 	if got := p.Pick(); got != nil {
@@ -683,10 +695,12 @@ func TestCooldownUntilTomorrow4AMPersists(t *testing.T) {
 	dir := t.TempDir()
 	fp := filepath.Join(dir, "state.json")
 	p := New(fp)
+	defer p.Close()
 	p.Add(&auth.Auth{UID: "u1"})
 	p.CooldownUntilTomorrow4AM("u1", "余额不足")
 	p.Flush()
 	p2 := New(fp)
+	defer p2.Close()
 	p2.Add(&auth.Auth{UID: "u1"})
 	st, ok := p2.Status("u1")
 	if !ok || st.Until.Hour() != 4 || st.Reason != "余额不足" {
@@ -738,10 +752,12 @@ func TestFlushPersistsCredits(t *testing.T) {
 	dir := t.TempDir()
 	fp := filepath.Join(dir, "state.json")
 	p := New(fp)
+	defer p.Close()
 	p.Add(&auth.Auth{UID: "u1"})
 	p.SetCredits("u1", 42)
 	p.Flush()
 	p2 := New(fp)
+	defer p2.Close()
 	p2.Add(&auth.Auth{UID: "u1"})
 	st, ok := p2.Status("u1")
 	if !ok || st.Credits != 42 {
@@ -757,6 +773,7 @@ func TestAutoFlush(t *testing.T) {
 	dir := t.TempDir()
 	fp := filepath.Join(dir, "state.json")
 	p := New(fp)
+	defer p.Close()
 	p.Add(&auth.Auth{UID: "u1"})
 	p.SetCredits("u1", 77)
 
@@ -770,11 +787,24 @@ func TestAutoFlush(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	p2 := New(fp)
-	p2.Add(&auth.Auth{UID: "u1"})
-	st, ok := p2.Status("u1")
-	if !ok || st.Credits != 77 {
-		t.Fatalf("auto flush not persisted: %+v ok=%v", st, ok)
+	// 重载校验须轮询：Windows 上高频 create/rename 的 TempDir 里实测存在毫秒级
+	// 「Stat 可见但 ReadFile not exist」的瞬态窗口（数 ms 后自愈，文件内容无恙），
+	// Stat 成功即断言会偶发把 p2 的 load 撞进窗口而误报 Credits=0。
+	// 轮询到重载读出 credits=77 或超时，断言强度不变（落盘内容最终必须可正确重载）。
+	var st Status
+	var ok bool
+	for {
+		p2 := New(fp)
+		p2.Add(&auth.Auth{UID: "u1"})
+		st, ok = p2.Status("u1")
+		p2.Close() // 每轮显式回收（循环内 defer 会堆积）
+		if ok && st.Credits == 77 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("auto flush not persisted: %+v ok=%v", st, ok)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
@@ -782,6 +812,7 @@ func TestFlushIdempotentWhenClean(t *testing.T) {
 	dir := t.TempDir()
 	fp := filepath.Join(dir, "state.json")
 	p := New(fp)
+	defer p.Close()
 	p.Add(&auth.Auth{UID: "u1"})
 	p.Flush() // 无 dirty，不应写盘
 	if _, err := os.Stat(fp); !os.IsNotExist(err) {
@@ -798,6 +829,7 @@ func TestSaveFailureRecordedAndRecovers(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := New(filepath.Join(block, "state.json"))
+	defer p.Close()
 	p.Add(&auth.Auth{UID: "u1"})
 	p.SetCredits("u1", 42)
 	p.Flush()
@@ -808,6 +840,7 @@ func TestSaveFailureRecordedAndRecovers(t *testing.T) {
 	// 换回可写目录 → 成功后 persistFails 归零（恢复日志由零值门槛触发）。
 	good := filepath.Join(t.TempDir(), "state.json")
 	p2 := New(good)
+	defer p2.Close()
 	p2.Add(&auth.Auth{UID: "u1"})
 	p2.SetCredits("u1", 42)
 	p2.Flush()
@@ -1194,6 +1227,7 @@ func TestLoadLegacyStateFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := New(fp)
+	defer p.Close()
 	p.Add(&auth.Auth{UID: "legacy"})
 	st, ok := p.Status("legacy")
 	if !ok {
@@ -1239,6 +1273,7 @@ func TestSaveMirrorsSnapshot(t *testing.T) {
 	dir := t.TempDir()
 	fp := filepath.Join(dir, "state.json")
 	p := New(fp)
+	defer p.Close()
 	ms := &memStore{}
 	p.SetStore(ms)
 	p.Add(&auth.Auth{UID: "u1"})
@@ -1272,6 +1307,7 @@ func TestRestoreUsesRedisWhenNewer(t *testing.T) {
 	snap := snapshot{stateFile: stateFile{Accounts: map[string]stateAccount{"u1": {Credits: 999}}}, SavedAt: time.Now()}
 	ms.loadData, _ = json.Marshal(snap)
 	p := New(fp)
+	defer p.Close()
 	p.SetStore(ms)
 	p.RestoreFromSnapshot()
 	st, ok := p.Status("u1")
@@ -1291,6 +1327,7 @@ func TestRestoreUsesLocalWhenNewer(t *testing.T) {
 	snap := snapshot{stateFile: stateFile{Accounts: map[string]stateAccount{"u1": {Credits: 999}}}, SavedAt: time.Now().Add(-time.Hour)}
 	ms.loadData, _ = json.Marshal(snap)
 	p := New(fp)
+	defer p.Close()
 	p.SetStore(ms)
 	p.RestoreFromSnapshot()
 	st, ok := p.Status("u1")
@@ -1308,6 +1345,7 @@ func TestRestoreNoRedisUsesLocal(t *testing.T) {
 	}
 	ms := &memStore{loadOK: false}
 	p := New(fp)
+	defer p.Close()
 	p.SetStore(ms)
 	p.RestoreFromSnapshot()
 	st, ok := p.Status("u1")

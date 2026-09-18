@@ -1,5 +1,112 @@
 # CHANGELOG
 
+## 2026-09-19 · v1.3.0：概览页历史用量日历选择
+
+### 新增
+- **运行概览页支持回看历史任意一天的用量**（丞相需求：不仅看每天，之前的天也要能选来看）。
+  - 交互：页头新增日期徽标（默认「今日」），点击弹出**日历弹层**——有数据的天打蓝点、
+    超出 30 天保留期的置灰并提示、未来日期禁用、顶部「今日」一键弹回；Esc/点击外部关闭。
+    日历为手写纯 CSS/JS（约 150 行），延续 admin 页零外部依赖传统（原生 date 控件样式不搭
+    且做不了打点/置灰，不采用）。
+  - 联动范围：Tokens / 请求（含失败数）/ 实扣积分 / 平均首字 / 模型分布环形图全部切到所选日，
+    卡片标题动态化（「今日 Tokens」↔「09-18 Tokens」）；「剩余积分」为实时池状态不随日期变，
+    「累计 Tokens」卡继续承载累计口径；趋势图高亮列跟随所选日。
+- **「立即签到」按钮已签到态 + 实时反馈**（丞相需求：签到后按钮变淡表示已签到，实时性要好）。
+  - 后端：`CheckinReport` 补 `date` 字段（此前只有时刻，无法判定是否今天），新增
+    `CheckedInToday()`（今天且至少一账号成功；上游幂等返回的「今天已签到」也算成功；
+    全失败不视为已签到、允许重试）；`/admin/api/overview` 透出 `checkin_done`。
+  - `POST /admin/api/checkin` 由 fire-and-forget 改为**同步执行**：响应返回时签到已完成，
+    前端"完成即知"，不再依赖 4 秒后轮询发现（实时性从秒级轮询提为即时）。
+  - 前端按钮三态：正常（可点）→ 签到中（转圈）→ **今日已签到（淡化+禁用）**；页面加载与
+    5s 轮询都按 `checkin_done` 同步（跨天自动恢复可点、定时签到后其他打开的页面同步淡化）；
+    全失败时恢复可点以便重试。
+  - 测试：`TestCheckedInToday`（今天/昨天/全失败/旧文件无日期等 6 例）+
+    `TestRunCheckinMarksDateAndDone` 集成。
+- **「停止服务」自动关闭 admin 窗口**（丞相需求：停止服务后控制台窗口跟着退出，不留死页面）。
+  - 浏览器硬限制：Chrome 拦截页面脚本关闭自身窗口（`window.close` 对用户打开的窗口一律
+    无效，`--app` 应用窗口同样被拦，实测推翻了"app 窗口可关"的假设）。
+  - 最终方案（OS 层面，不赌浏览器政策）：`launch.vbs` / `start-workbuddy.cmd` 启动 admin
+    窗口时带**独立 profile**（`data/admin-profile`，不与用户日常 Chrome 合并实例）+
+    `--workbuddy-admin-window` 特征标记；`stop-helper.ps1` 杀完服务后按命令行特征结束该
+    专用 Chrome 实例。前端 `doStop` 保留探测关窗尝试与「服务已停止」遮罩兜底。
+  - 实测：带特征的 headless Chrome 实例杀前命中 1、杀后归零，不误伤日常 Chrome；
+    `stop-helper.ps1` Parser 解析 0 错误。
+  - 教训：三个启停脚本是**编码敏感文件**（wscript/cmd/PS5.1 均按 ANSI 读无 BOM 文件），
+    新增注释一律 ASCII（stop-helper.ps1 文件头原有 "ASCII only" 约定被本次中文注释破坏，
+    已恢复；launch.vbs 新增中文注释曾致 800A03EA 编译错误，cscript 编译验证通过后修复）。
+- **后端** `/admin/api/stats` 响应新增 `available_dates`（有数据的日期列表）与
+  `day_details`（30 天内每天完整明细含模型分布）。本地单用户接口一次带全量换切换零延迟；
+  数据底子是 v1.1.0 起按「天 × 模型」落盘的 `data/stats.json`（天桶保留 30 天，之前是存了没暴露）。
+
+### 修复
+- 概览「平均首字」卡副标题恒显示「今日暂无流式」：后端 `today` 汇总漏吐 `ttfb_n` 字段，
+  前端判断 `t.ttfb_n>0` 恒 false。补齐字段（`dayDetail` 同步带上），副标题随所选日期正确显示流式次数。
+- 既有时间依赖测试 bug（与本次功能无关，恰在午夜跑全量时暴露）：`TestCooldownUntilTomorrow4AMPersists` /
+  `TestChatHardCreditCooldownUntilNextDay4AM` 把「次日 04:00 距今」写死 ≤24h，而 now∈[00:00,04:00)
+  时相距 24~28h，每天午夜到凌晨四点之间跑必失败。断言上限修正为 28h 并注明原因。
+- `internal/scheduler` 测试污染：`persistState` 落盘为 cwd 相对路径，包内测试会把
+  `data/checkin-state.json` 写进包目录（2026-09-11 起既存），新测试经 `New→loadState` 读到后误判。
+  新测试开头显式清理该残留文件。
+
+### 测试
+- 新增 `TestAdminStatsHistoryDayDetails`：断言 `available_dates` 排序正确、`day_details` 含
+  模型明细与首字均值（今天/昨天两天种子数据）。
+- `go build ./...`、`go vet ./...`、`go test ./... -count=1` 全绿。
+
+## 2026-09-18 · v1.2.1：请求体 8 MiB 静默截断修复 + Pool 生命周期补全
+
+### 背景
+- 另一工作区副本（DSH 会话）排查出根因并已实测修复，本仓库同步同款修复。
+  实测数据均出自该会话（2026-09-18），非本仓库重新测量。
+
+### 修复 1：请求体 8 MiB 静默截断（根因）
+- 旧代码 `io.ReadAll(io.LimitReader(r.Body, 8<<20))` 对超限请求体**静默截断**（不报错）：
+  JSON 变成半截 → `json.Unmarshal` 失败 → model 字段读不到 → 被白名单门禁误报成
+  `403 model_not_allowed` / `400 model is required`，把「请求体过大」伪装成「账号或白名单问题」。
+- 触发条件：agent 场景把截图以 base64 data URL 内联进请求体（实测约 3.7 MB/张，1080x2400 截图）。
+  观察到的失败样本 13 张图 base64 后约 8.2 MiB，恰好越过 8 MiB 上限——纯文本会话永远碰不到
+  该边界，这正是「换个会话就能用」的原因。
+- 修复（`internal/server/handler.go`）：
+  - 上限抬高为 `maxBodyBytes = 32<<20`（实测依据：上游接受 ≥96 MiB；本代理内存随 body 线性增长
+    8 MiB→105 MB / 32 MiB→266 MB / 64 MiB→454 MB；32 MiB 覆盖「十几张高清截图」并留 4 倍余量）；
+  - `io.LimitReader` → `http.MaxBytesReader`：超限返回 **413 `request_too_large`** + stderr 一行日志；
+  - 413 分支补 `chatStat` 记账，超限请求与正常路径一样落 `/admin` 请求日志（否则排查时完全不可见）；
+    body 已截断无法解析 model，以空 body 构造（model 列记 `-`）。
+
+### 修复 2：`TestAutoFlush` 偶发 flake（实测 2/5 轮命中）+ Pool 生命周期
+- 本仓库 `go test ./internal/pool/ -count=20` 循环复现出偶发 FAIL：`auto flush not persisted: Credits=0`。
+- 排查证据（插桩实测）：失败瞬间 `state.json` 存在且内容完整（credits=77）、目录无 `.tmp`、
+  `load()` 的 ReadFile 报 not exist 且 3ms 内重试仍失败、数 ms 后自愈、`-race` 无报告。
+- 结论：Windows 上高频 create/rename 的 TempDir 存在**毫秒级「Stat 可见但 ReadFile not exist」
+  瞬态窗口**，Stat 成功即断言会撞进窗口误报。产品侧 `saveLocked`（tmp+Rename 原子落盘）无问题。
+- 修复：
+  - `TestAutoFlush` 改为轮询「重载读出 credits=77」或超时，断言强度不变（不再依赖 Stat 与 ReadFile
+    之间的时序假设）；修复后 8 轮 `-count=20/40`（160+ 次迭代）全绿；
+  - `internal/pool` 新增 `Pool.Close()`（停止后台 flusher + 同步落盘，幂等）：此前 `New()` 启动的
+    flusher goroutine 无任何回收手段，测试中泄漏且会在 `t.TempDir()` 清理后仍向目录写盘
+    （另一副本实测 `TempDir RemoveAll cleanup` 竞争即此根源）；`cmd/server` 退出路径改为 `defer p.Close()`。
+
+### 测试
+- 新增 `TestChatBodyOverLimitReturns413`：超限必须 413 `request_too_large`，绝不退化成 model 相关报错，
+  且必须出现在 `recentRequests()`（可观测性回归点）。
+- 新增 `TestChatBodyAtLimitPasses`：恰好等于上限的请求体正常放行（严格大于才拒，不误伤边界）。
+- `go build ./...`、`go vet ./...`、`go test ./... -count=1` 全绿；pool 包 `-count=20/40` 多轮全绿。
+
+### 文档同步
+- `config.example.json` 补 `model_allowlist` 键（`config.go` 已定义、admin 写回已使用、
+  真实 `config.json` 已存在，样例此前遗漏），README 配置样例同步。
+- README 测试命令段据实修正：`gofmt -l .` 在 CRLF 工作区（`core.autocrlf=true`）会标记全部
+  `.go` 文件，属行尾差异非格式缺陷，删去「应为空」的错误声明。
+- README「稳定性设计」补「请求体上限 32 MiB」条目，写明**勿改回 `io.LimitReader`** 的告警。
+
+### 待办：图片降采样（暂缓，先记录）
+- 现状：32 MiB 上限下大截图（1080x2400，2.8 MB/张）约 8 张，典型截图（412 KB）约 60 张；
+  超限现在明确报 413，看到即知需少贴图。
+- 实测依据：上游按固定 tile 预算计费，同一张截图 120 KB 与 2.8 MB 都是 ~960 token——
+  卡住的是**字节**不是 token；sharp 重编码 JPEG q80 长边 1568 可缩 95% 且识别质量不变。
+- 触发条件：再次出现「图片过多导致 413」时启用；首选落点为**客户端侧**压缩（对所有下游生效，
+  属改官方行为需授权），代理侧不推荐（每请求解压重编码增延迟与内存，且需引入图片处理依赖）。
+
 ## 2026-09-18 · v1.2.0：剩余积分准实时扣减
 
 ### 新增

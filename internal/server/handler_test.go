@@ -330,13 +330,93 @@ func TestChatHardCreditCooldownUntilNextDay4AM(t *testing.T) {
 	if st.Until.Hour() != 4 {
 		t.Errorf("until hour=%d want 4 (next-day 04:00)", st.Until.Hour())
 	}
-	if d := time.Until(st.Until); d <= 0 || d > 24*time.Hour {
-		t.Errorf("until %v not within (0,24h]: %v", st.Until, d)
+	// 上限 28h（24h+4h）：now∈[00:00,04:00) 时"次日 04:00"相距 24~28h，
+	// 写死 24h 会在每天午夜到凌晨四点之间跑测试时必失败（2026-09-19 00:0x 实测踩中）。
+	if d := time.Until(st.Until); d <= 0 || d > 28*time.Hour {
+		t.Errorf("until %v not within (0,28h]: %v", st.Until, d)
 	}
 	// 立即换号成功：good 被选中。
 	stGood, _ := p.Status("good")
 	if stGood.Cooling || stGood.Disabled {
 		t.Errorf("good should stay healthy: %+v", stGood)
+	}
+}
+
+// TestChatBodyOverLimitReturns413 回归防护：超过 maxBodyBytes 的请求体必须得到
+// 明确的 413，而不是旧行为下 LimitReader 静默截断后伪装成 model 缺失
+// （曾导致 403 model_not_allowed / 400 model is required 的误导性报错）。
+func TestChatBodyOverLimitReturns413(t *testing.T) {
+	// recordRequest 在 chatLogEnabled=false（TestMain 默认）时直接 return，
+	// 故须在 ServeHTTP 之前开启，才能断言 413 落进请求日志。
+	withChatLog(t)
+	up := newFakeUpstream(t, func(authz string) (int, string, bool) {
+		return 200, sseOK, true
+	})
+	h := NewHandler(Config{
+		Pool:     testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at1", ExpiresAt: 9999999999}),
+		Upstream: up,
+	})
+	// 构造恰好超限的请求体：model 字段在最前，保证若被静默截断也仍能解析出 model，
+	// 从而把「截断」与「model 缺失」两个失败原因彻底区分开。
+	pad := strings.Repeat("x", maxBodyBytes)
+	raw := `{"model":"glm-5.2","messages":[{"role":"user","content":"` + pad + `"}]}`
+	if len(raw) <= maxBodyBytes {
+		t.Fatalf("test body not over limit: %d", len(raw))
+	}
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(raw))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("code=%d want 413 body=%s", rec.Code, rec.Body)
+	}
+	var e map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &e); err != nil {
+		t.Fatalf("resp not json: %v body=%s", err, rec.Body)
+	}
+	errObj, _ := e["error"].(map[string]any)
+	if errObj == nil || errObj["code"] != "request_too_large" {
+		t.Errorf("want code=request_too_large, got %s", rec.Body)
+	}
+	// 关键回归点：绝不能退化成 model 相关报错。
+	if strings.Contains(rec.Body.String(), "model") {
+		t.Errorf("over-limit body must not be reported as a model error: %s", rec.Body)
+	}
+	// 可观测性回归点：413 必须与正常路径一样落进 /admin 请求日志，
+	// 否则超限请求在请求日志里完全不可见。
+	found := false
+	for _, r := range recentRequests(reqlogCapacity) {
+		if r.Status == http.StatusRequestEntityTooLarge {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("413 must be recorded in the request log (recentRequests)")
+	}
+}
+
+// TestChatBodyAtLimitPasses 边界另一侧：恰好等于 maxBodyBytes 的请求体必须正常放行，
+// 确保上限判定是「严格大于才拒」，不会误伤边界请求。
+func TestChatBodyAtLimitPasses(t *testing.T) {
+	up := newFakeUpstream(t, func(authz string) (int, string, bool) {
+		return 200, sseOK, true
+	})
+	h := NewHandler(Config{
+		Pool:     testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at1", ExpiresAt: 9999999999}),
+		Upstream: up,
+	})
+	head := `{"model":"glm-5.2","messages":[{"role":"user","content":"`
+	tail := `"}]}`
+	pad := strings.Repeat("x", maxBodyBytes-len(head)-len(tail))
+	raw := head + pad + tail
+	if len(raw) != maxBodyBytes {
+		t.Fatalf("test body not exactly at limit: %d", len(raw))
+	}
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(raw))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("code=%d want 200 body=%s", rec.Code, rec.Body)
 	}
 }
 

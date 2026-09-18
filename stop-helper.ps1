@@ -9,6 +9,17 @@ Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" |
 Write-Host '[*] Stopping proxy process...'
 Stop-Process -Name 'workbuddy-proxy' -Force
 
+Write-Host '[*] Closing admin window (Chrome app instance)...'
+# launch.vbs / start-workbuddy.cmd start the admin window with an isolated
+# profile and the --workbuddy-admin-window marker flag. Chrome blocks scripts
+# from closing their own window (window.close is intercepted), so this script
+# closes the dedicated instance at OS level by command-line feature. The
+# isolated profile guarantees the user's daily Chrome is never matched/kept
+# untouched. (Keep ASCII only - see file header note.)
+Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" |
+    Where-Object { $_.CommandLine -like '*--workbuddy-admin-window*' } |
+    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+
 Start-Sleep -Seconds 2
 
 Write-Host '[*] Verifying port 8091...'
