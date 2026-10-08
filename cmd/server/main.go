@@ -81,7 +81,22 @@ func main() {
 	}
 
 	up := upstream.New()
+	// 短 RPC（refresh/checkin/balance/FetchModels）总时长上限，语义不变。
 	up.HTTP.Timeout = time.Duration(cfg.Upstream.TimeoutSeconds) * time.Second
+	// 聊天 SSE 专用 client：New() 已建好（与 HTTP 共享 Transport、连接池不重复），
+	// 但**不设整体 Timeout**——聊天超时改由两个专项上限管：
+	//   - Transport.ResponseHeaderTimeout：首字节前（响应头）上限；
+	//   - IdleTimeout：流中空闲上限（由 upstream.MonitorBody 看门狗执行）。
+	// 此前聊天与短 RPC 共用 HTTP.Timeout=120s，大上下文会话（预填充数十秒）
+	// 被一刀切死，表现成 sync 502 与 stream 假成功空流。
+	// 只覆盖响应头超时这一项，其余连接池参数沿用 New() 的共享 Transport。
+	if tr, ok := up.ChatHTTP.Transport.(*http.Transport); ok {
+		tr.ResponseHeaderTimeout = time.Duration(cfg.Upstream.HeaderTimeoutSeconds) * time.Second
+	}
+	up.HeaderTimeout = time.Duration(cfg.Upstream.HeaderTimeoutSeconds) * time.Second
+	up.IdleTimeout = time.Duration(cfg.Upstream.IdleTimeoutSeconds) * time.Second
+	log.Printf("chat 超时策略：首字节=%v，流中空闲=%v，总时长不设上限",
+		up.HeaderTimeout, up.IdleTimeout)
 	up.SanitizeFingerprints = cfg.Features.SanitizeBlacklistFingerprints
 
 	sch := scheduler.New(scheduler.Config{

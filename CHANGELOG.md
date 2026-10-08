@@ -1,5 +1,67 @@
 # CHANGELOG
 
+## 2026-10-08 · v1.3.1：修复大上下文会话 502（聊天超时拆分）
+
+### 修复
+- **贴长上下文/多图会话请求必然 502**（根因修复）。此前聊天 SSE 与短 RPC（refresh/checkin/
+  balance）共用同一个 `http.Client`，其 `Timeout: 120s` 是**整个请求生命周期**的上限而非首字节
+  上限——大上下文会话仅预填充就要数十秒，超过即被掐断，非流式路径由 `Aggregate` 读不完流而报
+  502 `upstream_parse`。实测证据：`data/request-log.json` 中 16 次 502 的 `total_ms` 恒为
+  120025~120038ms，与 `timeout_seconds: 120` 一次不差。
+  修复为把聊天超时拆成两个**专项**上限，取消整体约束：
+  - `upstream.header_timeout_seconds`（默认回落 `timeout_seconds`）：只计响应头到达前的时长，
+    即 Transport 的 `ResponseHeaderTimeout`——只治「上游迟迟不响应头」。
+  - `upstream.idle_timeout_seconds`（默认 300）：流**进行中**的空闲上限。新增
+    `internal/upstream/idle.go` 的 `MonitorBody` 看门狗包在 SSE body 外层：每次读到底层数据
+    （`n>0`）就刷新 `lastRead`，后台 goroutine 周期检查，静默超阈值才 cancel 请求 context
+    中断阻塞中的 `Read`。**活跃吐数据即续命**，长流式生成不会被误杀。
+  - 聊天改走独立的 `ChatHTTP` client（与短 RPC 的 `HTTP` 分开，共享同一 Transport 不重复开
+    连接池），`HTTP.Timeout` 只作用于短 RPC，语义不变。
+- **流式请求空流被记成假成功**。`upstream.Stream` 返回的空流错误此前被 `_ =` 吞掉，而
+  `st.status` 在调用 `Stream` **之前**就已置 200——客户端收到的是空流 + `[DONE]`，admin 日志
+  与请求日志里同一条记录显示 200 且 `tok=0 / total=120.0s`，看起来成功实际一个字也没有
+  （这比 502 更危险：没有人会去查一条"成功"的记录）。修复：空流错误改为哨兵
+  `errEmptyStream` + `IsEmptyStreamError()` 判定，流尾据此把观测状态收敛到 **502**
+  `upstream_parse`，与非流式 `Aggregate` 空流→502 同语义；并打一行 WARN 日志。HTTP 头已发出
+  故客户端侧仍是 200，但运维侧不再有假成功。只认空流哨兵，客户端主动断连的写失败不误标。
+
+### 变更
+- **超时止损，不再无谓轮转**。此前全仓没有超时识别，超时和「网络抖动」共用同一条换号路径：
+  必然超时的请求会轮转 `MaxRotate` 次（120s 下最坏约半小时），期间还给一串健康号喂连败计数。
+  新增 `isUpstreamTimeout` 三态判定（`net.Error.Timeout()` / 显式 `DeadlineExceeded` /
+  客户端仍在但 ctx 被取消即本地看门狗掐流），命中即**终止轮转、不罚号**，末端返回可区分的
+  `upstream timeout` 文案（区别于 `no_healthy_account`）。客户端主动断连（`r.Context()` 已
+  取消）不误判，照常走原路径。
+- `ChatStream` 签名新增可选 `rctx ...context.Context`：派生可取消 ctx，既继承客户端的取消传播
+  （客户端断连 → 上游请求一并取消），又让 `MonitorBody` 的 `Close` 能独立 cancel 本请求
+  （空闲掐流）。省略该参数时行为与原来完全一致（回落 `context.Background()`），
+  既有调用方与测试零改动。
+- 新增环境变量 `WB2A_HEADER_TIMEOUT_SECONDS` / `WB2A_IDLE_TIMEOUT_SECONDS`，与
+  `WB2A_TIMEOUT_SECONDS` 同一风格覆盖 `config.json`。
+- `config.example.json` / README 配置示例补 `header_timeout_seconds` / `idle_timeout_seconds`
+  两项；启动日志新增一行 `chat 超时策略：首字节=X，流中空闲=Y，总时长不设上限`，装配值一目了然。
+
+### 测试
+- 新增 `internal/upstream/idle.go` 的看门狗用例四组：静默超阈值掐流、活跃流周期吐数据不掐
+  （读 10 字节约 300ms > idle 80ms，专防退化成绝对 deadline）、`idle<=0` 原样返回底流、
+  `idleTick` 周期钳位 [10ms, 1s]。
+- 新增 `internal/upstream/chat_client_test.go`：聊天必须走 `ChatHTTP` 而非 `HTTP`（装配契约，
+  回退成共用即失去修复）、`ChatHTTP` 未设置时回落 `HTTP`（零回归）、`New()` 分出两个 client
+  且聊天侧无整体超时。
+- 新增 `internal/server/chat_timeout_test.go`：`isUpstreamTimeout` 七例、超时止损只打一次上游
+  且三号均不被冷却/禁用、空流收敛 502、看门狗掐流/续命/禁用。
+- `go vet ./...` 干净；`go test ./...` 全绿。
+- **真机端到端**（真实 `upstream.Client` + httptest 假上游，先静默 3s 再活跃吐 4s）：
+  stream 38 帧 200、sync 36 token 200，均不再被误杀；反向验证把 idle 压到 500ms 后流在
+  511ms 被掐、0 帧，确认看门狗真的在工作。
+
+### 备注
+- 配置完全向后兼容：旧 `config.json` 只有 `timeout_seconds` 时，header 回落该值、idle 走默认
+  300s，无需改配置即可获得修复（长生成不再被整体超时切死）。
+- 观察到的 502 全部是 `mode:"sync"`（非流式）——该路径要同步等整个流读完才响应，即便不超时，
+  超大回复客户端也要干等数分钟。建议客户端改用 `"stream":true`：那个路径本就是逐帧吐出，
+  且本次一并修掉了它的空流假成功问题。
+
 ## 2026-09-19 · v1.3.0：概览页历史用量日历选择
 
 ### 新增

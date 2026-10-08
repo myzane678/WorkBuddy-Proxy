@@ -2,12 +2,15 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -388,8 +391,17 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		rc, status, respBody, terr := h.cfg.Upstream.ChatStream(acct, body)
+		rc, status, respBody, terr := h.cfg.Upstream.ChatStream(acct, body, r.Context())
 		if terr != nil {
+			// 上游超时 / 停滞：不换号、不罚号。
+			// 超时不是账号的问题：同一份请求换到别的号，撞上的是同一个慢上游，
+			// 只会把客户端拖到 MaxRotate × header_timeout，期间还给一串健康号喂连败计数。
+			if isUpstreamTimeout(terr, r.Context().Err() != nil) {
+				st.status = http.StatusServiceUnavailable
+				lastErr = fmt.Errorf("%w: %v", errUpstreamTimeout, terr)
+				log.Printf("chat uid=%s: upstream timeout: %v (轮转已止损，号不罚)", acct.UID, terr)
+				break
+			}
 			// 网络层抖动：只换号，不喂熔断计数（传输层错误对连续失败连坐熔断过于严苛）。
 			// 上游 client 已打 transport error 日志。
 			st.status = http.StatusServiceUnavailable
@@ -413,9 +425,11 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		}
 		if peek.Stream {
 			// 流式：透传结束后立即关闭上游 body，避免 defer 在轮转场景下堆积 fd。
+			// status 先置 200（HTTP 头已发出，无法再改），但流尾按 Stream 返回的
+			// 错误收敛观测：空流（上游 200 但 0 有效帧）修成 502，不再记假成功。
 			st.status = http.StatusOK
 			stats := newChatStatsReaderSince(rc, st.start)
-			_ = upstream.Stream(w, stats)
+			sErr := upstream.Stream(w, stats)
 			st.ttfb = stats.TTFB()
 			st.toks, _ = stats.Tokens()
 			st.inToks = stats.InputTokens()
@@ -423,6 +437,14 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			// 准实时余量：从池内 credits 本地扣减本次实扣（签到回写时由上游对账校正）。
 			h.cfg.Pool.DeductCredit(acct.UID, st.credit)
 			rc.Close()
+			if upstream.IsEmptyStreamError(sErr) {
+				// 上游 200 但空流（Stream 已写 error 帧 + [DONE] 兜底）：这是上游缺陷
+				// 不是成功。HTTP 头已发出只能维持 200，但日志/状态收敛到 502 观测，
+				// 与非流式 Aggregate 空流→502 upstream_parse 同语义。
+				// 只认空流：客户端断连的写失败不误标（人已走，502 无意义）。
+				st.status = http.StatusBadGateway
+				log.Printf("chat uid=%s model=%s: 上游空流（200 + 0 有效帧）", acct.UID, st.model)
+			}
 			return
 		}
 		resp, err := upstream.Aggregate(rc)
@@ -448,6 +470,29 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 	writeOpenAIError(w, http.StatusServiceUnavailable, "no_healthy_account", msg)
 	st.status = http.StatusServiceUnavailable
+}
+
+// errUpstreamTimeout 上游超时的哨兵：末端出口据此给出与「没号可用」可区分的文案。
+var errUpstreamTimeout = errors.New("upstream timeout")
+
+// isUpstreamTimeout 判断这一跳的失败是否属于「上游超时 / 停滞」。超时不是账号的
+// 问题，换号注定白换（同一份请求撞同一个慢上游），必须止损：不轮转、不罚号。
+// 三态判定：net.Error.Timeout()（ResponseHeaderTimeout / Client.Timeout）、
+// 显式 deadline（DeadlineExceeded / os.ErrDeadlineExceeded）、以及**客户端仍在但
+// ctx 被取消**——那只能是本地空闲看门狗掐的流，即上游停滞。客户端主动断连时
+// r.Context() 已取消，不走这里（clientGone=true）。
+func isUpstreamTimeout(err error, clientGone bool) bool {
+	if err == nil {
+		return false
+	}
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		return true
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, os.ErrDeadlineExceeded) {
+		return true
+	}
+	return !clientGone && errors.Is(err, context.Canceled)
 }
 
 // applyErrorPolicy 按错误分类对账号施加冷却/禁用/熔断策略（最终版状态机）。

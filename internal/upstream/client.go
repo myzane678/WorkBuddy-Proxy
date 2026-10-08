@@ -4,6 +4,7 @@ package upstream
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -110,7 +111,17 @@ type apiEnvelope struct {
 
 // Client 上游 HTTP 客户端。Base 字段可覆盖便于测试。
 type Client struct {
+	// HTTP 短 RPC 专用（refresh/checkin/balance/FetchModels），Timeout 管总时长。
 	HTTP *http.Client
+	// ChatHTTP 聊天 SSE 专用：**不设整体 Timeout**，改由 Transport 的
+	// ResponseHeaderTimeout 管首字节、IdleTimeout 管流中空闲。
+	// 两者共享同一 Transport（连接池不重复），nil 时回落 HTTP（测试/裸用路径）。
+	ChatHTTP *http.Client
+
+	// HeaderTimeout 聊天 SSE 首字节前（响应头）上限；<=0 表示不启用。
+	HeaderTimeout time.Duration
+	// IdleTimeout 聊天 SSE 流中空闲上限（活跃吐数据续命不掐）；<=0 表示不启用。
+	IdleTimeout time.Duration
 
 	// effortsMu/efforts 缓存各模型 supportedEfforts（FetchModels 刷新），供请求体 effort 降级。
 	effortsMu sync.RWMutex
@@ -126,6 +137,9 @@ type Client struct {
 }
 
 // New 生产默认值。配置连接池减少 TLS 握手。
+//
+// HTTP 与 ChatHTTP 必须是两个 client：短 RPC 要整体超时兜底，聊天 SSE 不能有
+//（长生成合法，见 Client.ChatHTTP 注释）。两者共享同一 Transport，连接池不重复。
 func New() *Client {
 	tr := &http.Transport{
 		MaxIdleConns:        100,
@@ -134,12 +148,21 @@ func New() *Client {
 	}
 	return &Client{
 		HTTP:                 &http.Client{Timeout: 120 * time.Second, Transport: tr},
+		ChatHTTP:             &http.Client{Transport: tr},
 		SanitizeFingerprints: true,
 		ChatBaseCN:           "https://copilot.tencent.com",
 		BillingBaseCN:        "https://www.codebuddy.cn",
 		ChatBaseGlobal:       "https://www.workbuddy.ai",
 		BillingBaseGlob:      "https://www.workbuddy.ai",
 	}
+}
+
+// chatHTTP 返回聊天专用 client；未设置（如测试只注入 HTTP）时回落 HTTP。
+func (c *Client) chatHTTP() *http.Client {
+	if c.ChatHTTP != nil {
+		return c.ChatHTTP
+	}
+	return c.HTTP
 }
 
 func (c *Client) chatBase(a *auth.Auth) string {
@@ -245,27 +268,45 @@ func (c *Client) RefreshToken(a *auth.Auth) error {
 // ChatStream 发 chat 请求并返回原始 SSE body 流（调用方负责 Close）。
 // 非 2xx 时 rc 为 nil、body 为上游响应体（供调用方 Classify(status, string(body))）、err 为 nil；
 // 只有传输层失败才返回 err。
-func (c *Client) ChatStream(a *auth.Auth, body []byte) (rc io.ReadCloser, status int, respBody []byte, err error) {
+//
+// 超时分三层，都不再受 HTTP.Timeout 的整体约束（大上下文会话预填充就要数十秒）：
+//   - 首字节前：ChatHTTP 的 Transport.ResponseHeaderTimeout（= HeaderTimeout）；
+//   - 流中空闲：MonitorBody 看门狗（= IdleTimeout），活跃吐数据续命；
+//   - 请求总时长：不设上限——长生成合法，由上面两层兜异常挂起。
+func (c *Client) ChatStream(a *auth.Auth, body []byte, rctx ...context.Context) (rc io.ReadCloser, status int, respBody []byte, err error) {
 	url := c.chatBase(a) + "/v2/chat/completions"
 	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(c.prepareBody(body)))
 	if err != nil {
 		return nil, 0, nil, err
 	}
 	ChatHeaders(req, a)
-	resp, err := c.HTTP.Do(req)
+	// 派生可取消 ctx：从调用方 ctx 继承取消传播（客户端断连 → 本 ctx 取消），
+	// 同时让 MonitorBody 的 Close 能独立 cancel 本请求（空闲掐流）。
+	var parent context.Context = context.Background()
+	if len(rctx) > 0 && rctx[0] != nil {
+		parent = rctx[0]
+	}
+	reqCtx, cancel := context.WithCancel(parent)
+	req = req.WithContext(reqCtx)
+	resp, err := c.chatHTTP().Do(req)
 	if err != nil {
+		cancel()
 		log.Printf("chat_stream uid=%s: transport error: %v", a.UID, err)
 		return nil, 0, nil, err
 	}
 	if resp.StatusCode >= 400 {
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 		resp.Body.Close()
+		cancel()
 		kind := Classify(resp.StatusCode, string(raw))
 		log.Printf("chat_stream uid=%s: upstream %d %s body=%s",
 			a.UID, resp.StatusCode, kind, truncate(string(raw), 200))
 		return nil, resp.StatusCode, raw, nil
 	}
-	return resp.Body, resp.StatusCode, nil, nil
+	// 成功分支：cancel 所有权交给 MonitorBody（其 Close 会 cancel）；
+	// IdleTimeout<=0 时 MonitorBody 原样返回底流、无人调 cancel——可接受：
+	// 取消传播由 http.Transport 在 body Close / 父 ctx 取消时处理，连接正常清理。
+	return MonitorBody(resp.Body, c.IdleTimeout, cancel), resp.StatusCode, nil, nil
 }
 
 // ModelInfo 动态模型信息（含 maxInputTokens/maxOutputTokens）。

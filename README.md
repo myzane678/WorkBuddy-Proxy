@@ -23,6 +23,7 @@
 - 🔑 **登录工具** — `login-workbuddy.ps1` 交互式登录（Windows 原生），落盘即生效
 - 🏗 **Docker 部署** — 一键 `docker compose up`，healthcheck 常驻
 - 📈 **请求级日志** — `/admin` 请求记录表（seq/时间/模型/首字/耗时/uid/tokens/积分）+ 500 条环形持久化 + 模型/账号/模式/状态筛选与 CSV 导出
+- ⏱ **聊天超时分层** — 聊天不做整体超时（长生成合法），只卡「首字节前」与「流中空闲」两个专项上限；长上下文/多图会话不会被误杀成 502
 - 🏥 **健康检查** — `/healthz` 无健康账号时返回 503，可接负载均衡器
 - 📉 **状态汇总** — `/status` 返回 total/healthy/cooling/disabled 计数 + 每账号完整画像
 
@@ -100,7 +101,9 @@ curl -sN http://localhost:7863/v1/chat/completions \
     "keepalive_hours": [22]
   },
   "upstream": {
-    "timeout_seconds": 120
+    "timeout_seconds": 120,
+    "header_timeout_seconds": 120,
+    "idle_timeout_seconds": 300
   },
   "features": {
     "sanitize_blacklist_fingerprints": true
@@ -126,6 +129,16 @@ curl -sN http://localhost:7863/v1/chat/completions \
 ```
 
 **注意**：`cooldown.hard_credit` / `cooldown.err_threshold` / `cooldown.err_cooldown` 三个历史键已退役。硬冷却固定为**次日 04:00**（本地时区，`CooldownUntilTomorrow4AM`），连续错误语义并入熔断器（`pool.breaker_threshold` 触发指数退避）。旧配置中的这些键因 JSON 未知字段被自然忽略，不报错。
+
+**关于 `upstream` 的三个超时项**（v1.3.1 起分层）：
+
+| 字段 | 作用范围 | 语义 |
+|---|---|---|
+| `timeout_seconds` | 短 RPC（refresh / checkin / balance / 拉模型） | 整个调用的总时长上限 |
+| `header_timeout_seconds` | 聊天 SSE | **只计响应头到达前**的时长；不配则回落 `timeout_seconds` |
+| `idle_timeout_seconds` | 聊天 SSE | **流进行中**的空闲上限，活跃吐数据即续命；不配默认 300 |
+
+聊天**没有**「整个请求」的超时——长生成（大上下文会话预填充数十秒 + 长回答数分钟）是合法的，会被 `timeout_seconds` 误杀。旧配置文件只写 `timeout_seconds` 也能直接获得此行为（header 回落该值、idle 走默认 300），无需改配置。
 
 ## 账号轮换与冷却策略
 
@@ -255,7 +268,7 @@ internal/
 
 ## 更新日志
 
-查看 [CHANGELOG.md](CHANGELOG.md)。
+查看 [CHANGELOG.md](CHANGELOG.md)（最新版本 **v1.3.1**：修复大上下文会话 502）。
 
 ## License
 

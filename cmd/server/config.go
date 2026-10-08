@@ -39,7 +39,17 @@ type Config struct {
 	} `json:"schedule"`
 
 	Upstream struct {
+		// TimeoutSeconds 短 RPC（refresh/checkin/balance/FetchModels）总时长上限，默认 120。
+		//
+		// 注意：本项**不再**覆盖聊天路径。聊天 SSE 的长生成（大上下文会话预填充
+		// 数十秒 + 长回答数分钟）曾被 HTTP.Client.Timeout 一刀切死，表现为
+		// sync 502 与 stream 空流两个假故障。聊天改由下面两个专项上限管。
 		TimeoutSeconds int `json:"timeout_seconds"` // 默认 120
+		// HeaderTimeoutSeconds 聊天 SSE 首字节前（响应头）上限；<=0 回落 TimeoutSeconds。
+		// 只计响应头到达前的时长，头到达后 SSE 长流不受影响，不误杀长生成。
+		HeaderTimeoutSeconds int `json:"header_timeout_seconds"`
+		// IdleTimeoutSeconds 聊天 SSE 流中空闲上限（活跃吐数据续命不掐）；<=0 回落默认 300。
+		IdleTimeoutSeconds int `json:"idle_timeout_seconds"`
 	} `json:"upstream"`
 
 	Features struct {
@@ -144,6 +154,16 @@ func applyEnv(c *Config) {
 			c.Upstream.TimeoutSeconds = n
 		}
 	}
+	if v := os.Getenv("WB2A_HEADER_TIMEOUT_SECONDS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			c.Upstream.HeaderTimeoutSeconds = n
+		}
+	}
+	if v := os.Getenv("WB2A_IDLE_TIMEOUT_SECONDS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			c.Upstream.IdleTimeoutSeconds = n
+		}
+	}
 	if v := os.Getenv("WB2A_SANITIZE_FINGERPRINTS"); v != "" {
 		if b, err := strconv.ParseBool(v); err == nil {
 			c.Features.SanitizeBlacklistFingerprints = b
@@ -179,6 +199,13 @@ func (c *Config) normalize() error {
 	}
 	if c.Upstream.TimeoutSeconds <= 0 {
 		c.Upstream.TimeoutSeconds = 120
+	}
+	// header 缺省回落 timeout（保「首字节前换号」既有语义）；idle 缺省走内置大值。
+	if c.Upstream.HeaderTimeoutSeconds <= 0 {
+		c.Upstream.HeaderTimeoutSeconds = c.Upstream.TimeoutSeconds
+	}
+	if c.Upstream.IdleTimeoutSeconds <= 0 {
+		c.Upstream.IdleTimeoutSeconds = 300
 	}
 	if c.Region == "" {
 		c.Region = "cn"
