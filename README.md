@@ -106,7 +106,8 @@ curl -sN http://localhost:7863/v1/chat/completions \
     "idle_timeout_seconds": 300
   },
   "features": {
-    "sanitize_blacklist_fingerprints": true
+    "sanitize_blacklist_fingerprints": true,
+    "capture_refused_body": true
   },
   "upstash": {
     "url": "",
@@ -129,6 +130,8 @@ curl -sN http://localhost:7863/v1/chat/completions \
 ```
 
 **注意**：`cooldown.hard_credit` / `cooldown.err_threshold` / `cooldown.err_cooldown` 三个历史键已退役。硬冷却固定为**次日 04:00**（本地时区，`CooldownUntilTomorrow4AM`），连续错误语义并入熔断器（`pool.breaker_threshold` 触发指数退避）。旧配置中的这些键因 JSON 未知字段被自然忽略，不报错。
+
+**关于 `features.capture_refused_body`**（v1.4.0 起，默认 `true`）：命中上游 11128 渠道拦截时，把客户端入站原文与上游拒绝原文写入 `data/channel-refused-<时间戳>.json`（每进程最多 3 份、单份上限 8 MiB），用于定位触发拦截的请求指纹。留样含会话内容、仅存本机；不需要时置 `false`（或环境变量 `WB2A_CAPTURE_REFUSED_BODY=0`）即可完全关闭。
 
 **关于 `upstream` 的三个超时项**（v1.3.1 起分层）：
 
@@ -159,6 +162,8 @@ Disabled ←────┘ (session 死亡，永久)
 | **401 + session 死亡** | **永久禁用** | 人工重新登录 |
 | **404 上游偶发** | 60s 短冷却（不累计错误计数） | 到期自动恢复 |
 | **5xx 上游故障** | 喂熔断计数（`pool.breaker_threshold` 触发指数退避熔断） | 熔断到期自动恢复 / 成功清零 |
+| **请求级错误**（11115/11133/11135/11148） | **不罚号、不轮转**，原样透传上游 4xx 原文 | 客户端修正请求（同 body 换号结果不变） |
+| **11128 渠道拦截** | **不罚号**，同号退避重试 3 次（300ms/600ms） | 仍被拒时返回 `upstream_channel_refused`，稍后重试即可 |
 | **网络抖动** | **不计失败**，立即换号重试 | 即时 |
 
 ### 挑选策略
@@ -268,7 +273,7 @@ internal/
 
 ## 更新日志
 
-查看 [CHANGELOG.md](CHANGELOG.md)（最新版本 **v1.3.1**：修复大上下文会话 502）。
+查看 [CHANGELOG.md](CHANGELOG.md)（最新版本 **v1.4.0**：官方会话头族 + 请求级错误分流，含 11128 渠道拦截定位与自愈）。
 
 ## License
 

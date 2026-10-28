@@ -43,6 +43,10 @@ type Config struct {
 	APIKeys []APIKeyEntry
 	// Admin 状态页依赖（可零值：对应能力降级）。
 	Admin AdminExtras
+	// CaptureRefusedBody 11128 渠道拦截时留样出站请求体（见 capture.go）。
+	CaptureRefusedBody bool
+	// CaptureDir 留样目录（空 = ./data）。
+	CaptureDir string
 }
 
 // Handler 主路由。
@@ -317,6 +321,23 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// 会话头族元数据：出站必须带官方客户端那组会话头（X-Conversation-ID /
+	// -Request-ID / -Message-ID / X-Root-Request-ID / B3 链路），上游渠道校验缺
+	// X-Conversation-ID 会直接判非官方客户端拒收（400 code=11-128）。
+	// 全部在轮转循环外算一次，换号/重试/降级复用同一组值——轮级聚合键各算一套会把
+	// 同一次对话在后台拆成多条。
+	chatMeta := upstream.ChatMeta{
+		ConversationID:        session.ExtractConversationID(body),
+		ConversationRequestID: r.Header.Get("X-Conversation-Request-ID"),
+		TraceID:               r.Header.Get("X-Trace-ID"),
+	}
+	if chatMeta.ConversationID == "" {
+		chatMeta.ConversationHeaderID = session.NewConversationID()
+	}
+	if chatMeta.ConversationRequestID == "" {
+		chatMeta.ConversationRequestID = session.NewMessageID()
+	}
+
 	// 在途租约：成功选中即占名额；函数出口（含成功 return 与 panic）统一释放。
 	var heldUID string
 	defer func() {
@@ -391,7 +412,26 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		rc, status, respBody, terr := h.cfg.Upstream.ChatStream(acct, body, r.Context())
+		// 11128 渠道拦截是概率性的（实测同一请求 1 秒后重试即通过），且与账号无关：
+		// 换号不会更有效，单账号部署下轮转直接等于失败。同号短退避重试。
+		const channelMaxAttempts = 3
+		var rc io.ReadCloser
+		var status int
+		var respBody []byte
+		var terr error
+		for attempt := 1; ; attempt++ {
+			rc, status, respBody, terr = h.cfg.Upstream.ChatStreamWithMeta(acct, body, chatMeta, r.Context())
+			if terr != nil || status < 400 {
+				break
+			}
+			if upstream.Classify(status, string(respBody)) != upstream.ErrChannel || attempt >= channelMaxAttempts {
+				break
+			}
+			log.Printf("chat uid=%s: 上游 11128 渠道拦截，同号重试 %d/%d", acct.UID, attempt, channelMaxAttempts-1)
+			if !sleepCtx(r.Context(), time.Duration(attempt)*300*time.Millisecond) {
+				break // 客户端已断连：不再重试，交给下面的空流/超时路径收敛
+			}
+		}
 		if terr != nil {
 			// 上游超时 / 停滞：不换号、不罚号。
 			// 超时不是账号的问题：同一份请求换到别的号，撞上的是同一个慢上游，
@@ -412,6 +452,25 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		if status >= 400 {
 			st.status = status
 			kind := upstream.Classify(status, string(respBody))
+			// 确定性请求级错误（11115/11133/11135/11148）：同一个 body 换任何账号结果
+			// 都一样。轮转只会把一次失败放大成 MaxRotate 次上游调用，末端还会把 4xx
+			// 包装成可重试的 503，让客户端无限重试。直接透传上游原文，不罚号、不轮转。
+			if kind == upstream.ErrRequest {
+				fail(acct.UID)
+				writeUpstreamRequestError(w, status, string(respBody))
+				return
+			}
+			// 11128 渠道拦截：已同号重试仍被拒。给出与「账号池不可用」可区分的错误码，
+			// 否则用户会以为号挂了/积分没了，实际是上游概率性风控，稍后重试即可。
+			if kind == upstream.ErrChannel {
+				fail(acct.UID)
+				h.captureRefused(body, chatMeta, status, respBody)
+				writeOpenAIError(w, http.StatusServiceUnavailable, "upstream_channel_refused",
+					fmt.Sprintf("上游渠道校验拦截（11128），已同号重试 %d 次仍被拒；这是上游概率性风控，与账号池健康无关，稍后重试通常可通过。上游原文：%s",
+						channelMaxAttempts, clip(string(respBody), 300)))
+				st.status = http.StatusServiceUnavailable
+				return
+			}
 			lastErr = &upstream.Error{Kind: kind, Status: status, Msg: string(respBody)}
 			h.applyErrorPolicy(acct.UID, kind)
 			fail(acct.UID)
@@ -549,4 +608,38 @@ func writeOpenAIError(w http.ResponseWriter, status int, code, msg string) {
 			"code":    code,
 		},
 	})
+}
+
+// writeUpstreamRequestError 透传上游请求级错误原文：真实的 code/msg/requestId 对排查
+// 无可替代（例如 11115 会给出当前 token 数与上限），不用固定文案覆盖。
+func writeUpstreamRequestError(w http.ResponseWriter, status int, body string) {
+	msg := strings.TrimSpace(body)
+	if msg == "" {
+		msg = "request rejected by upstream"
+	}
+	if status < 400 || status >= 500 {
+		status = http.StatusBadRequest
+	}
+	writeOpenAIError(w, status, "upstream_request_error", msg)
+}
+
+// sleepCtx 等待 d；客户端提前断连时返回 false（不再对已离开的请求继续重试）。
+func sleepCtx(ctx context.Context, d time.Duration) bool {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-t.C:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+// clip 截断错误原文，避免把超长上游 body 塞进客户端错误消息。
+func clip(s string, n int) string {
+	s = strings.TrimSpace(s)
+	if len(s) > n {
+		return s[:n] + "…"
+	}
+	return s
 }

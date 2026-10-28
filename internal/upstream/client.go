@@ -28,6 +28,8 @@ const (
 	ErrNotFound                   // 404 上游偶发 → 短冷却，不累计错误计数（防雪崩）
 	ErrServer                     // 5xx 上游故障
 	ErrClient                     // 其他 4xx / 业务错误
+	ErrRequest                    // 确定性请求级错误（同 body 换号结果不变）：不罚号、不轮转、透传原文
+	ErrChannel                    // 11128 渠道校验拦截：概率性、与账号无关，同号退避重试优于换号
 )
 
 func (k ErrKind) String() string {
@@ -44,6 +46,10 @@ func (k ErrKind) String() string {
 		return "server"
 	case ErrClient:
 		return "client"
+	case ErrRequest:
+		return "request"
+	case ErrChannel:
+		return "channel"
 	default:
 		return "none"
 	}
@@ -70,17 +76,99 @@ var hardMarkers = []string{
 
 var sessionDeadMarkers = []string{"Offline user session not found", "12153"}
 
+// requestErrorMarkers 确定性请求级错误的文案形态：同一个 body 换任何账号，上游的
+// 解析/校验结果都一样，轮转只会把一次失败放大成 MaxRotate 次上游调用，末端还会把
+// 4xx 包装成「可重试」的 503，让客户端无限重试。
+//   11115 上下文超限 / 11133 参数被模型拒绝（上游 issue #39） / 11135 图片无效 /
+//   11148 工具调用与结果历史错配。
+var requestErrorMarkers = []string{
+	"prompt is too long",
+	"request parameters were rejected by the model",
+	"invalid image_url content",
+	"invalid_image_data",
+	"replace the image",
+	"tool calls and tool results do not match",
+	"tool_call_sequence_broken",
+}
+
+// requestErrorCodes 对应业务码（经 codeMarker 判定，容忍 JSON 空白与字符串形态）。
+var requestErrorCodes = []string{"11115", "11133", "11135", "11148"}
+
+// isRequestError 判定是否为确定性请求级错误（只看 4xx 调用方已保证）。
+func isRequestError(body, lower string) bool {
+	for _, m := range requestErrorMarkers {
+		if strings.Contains(lower, m) {
+			return true
+		}
+	}
+	for _, code := range requestErrorCodes {
+		if codeMarker(lower, code) {
+			return true
+		}
+	}
+	return false
+}
+
+// isChannelRefused 判定 11128 渠道校验拦截。
+//
+// 定位：上游认为这次请求「不是官方客户端发出的」。实测同一请求 1 秒后重试即通过
+//（2026-10-28 23:19:36 被拦 → 23:19:37 同一账号 200），说明它是概率性风控而非
+// 静态缺头；也与账号健康无关。因此不罚号，交由 handler 同号短退避重试。
+func isChannelRefused(lower string) bool {
+	return codeMarker(lower, "11128") ||
+		strings.Contains(lower, "unapproved channel") ||
+		strings.Contains(lower, "illegal api invocation")
+}
+
+// codeMarker 判定 body 是否含指定业务码：找 "code" 后跳过空白与冒号，允许值带引号。
+// 上游 JSON 序列化可能带空格（`"code": 11133`），字面量 marker 会漏判。
+func codeMarker(body, code string) bool {
+	const key = `"code"`
+	for i := 0; ; {
+		j := strings.Index(body[i:], key)
+		if j < 0 {
+			return false
+		}
+		i += j + len(key)
+		k := skipJSONSpace(body, i)
+		if k >= len(body) || body[k] != ':' {
+			continue
+		}
+		k = skipJSONSpace(body, k+1)
+		if k < len(body) && body[k] == '"' {
+			k++
+		}
+		if strings.HasPrefix(body[k:], code) {
+			return true
+		}
+	}
+}
+
+// skipJSONSpace 跳过 JSON 允许的空白字符。
+func skipJSONSpace(s string, i int) int {
+	for i < len(s) {
+		switch s[i] {
+		case ' ', '\t', '\n', '\r':
+			i++
+		default:
+			return i
+		}
+	}
+	return i
+}
+
 // Classify 按 HTTP 状态码 + body 判定错误类别。
+//
+// 判定顺序有两处刻意安排：
+//   - 账号级终态（12153 session dead）先于 429：账号级故障等不来自愈，不能被限流状态码掩盖；
+//   - 429 先于余额关键词：限流响应高频携带 "quota exceeded"/"额度不足" 这类跨两界措辞，
+//     若先跑 hardMarkers 会把一次限流硬冷却到次日 04:00（单账号部署等于全站停摆到签到）。
+//     真余额耗尽由 402 在上方捕获，非 429 的 quota 措辞仍走 hardMarkers。
 func Classify(status int, body string) ErrKind {
 	if status == http.StatusPaymentRequired {
 		return ErrHardCredit
 	}
 	lower := strings.ToLower(body)
-	for _, m := range hardMarkers {
-		if strings.Contains(lower, strings.ToLower(m)) || strings.Contains(body, m) {
-			return ErrHardCredit
-		}
-	}
 	for _, m := range sessionDeadMarkers {
 		if strings.Contains(body, m) {
 			return ErrSessionDead
@@ -88,6 +176,21 @@ func Classify(status int, body string) ErrKind {
 	}
 	if status == http.StatusTooManyRequests {
 		return ErrSoftRate
+	}
+	for _, m := range hardMarkers {
+		if strings.Contains(lower, strings.ToLower(m)) || strings.Contains(body, m) {
+			return ErrHardCredit
+		}
+	}
+	// 确定性请求级错误判在 404/5xx/通用 4xx 兜底之前：404 上打 11115 若落 ErrNotFound
+	// 会误冷却账号，而 11148 落 ErrClient 则白轮一遍健康号。
+	if status >= 400 && status < 500 && isRequestError(body, lower) {
+		return ErrRequest
+	}
+	// 11128 渠道拦截同样判在通用 4xx 兜底之前：它需要「同号重试」而不是「换号」，
+	// 混进 ErrClient 会让 handler 白白轮转掉其余健康号。
+	if status >= 400 && status < 500 && isChannelRefused(lower) {
+		return ErrChannel
 	}
 	if status == http.StatusNotFound {
 		return ErrNotFound
@@ -266,6 +369,15 @@ func (c *Client) RefreshToken(a *auth.Auth) error {
 }
 
 // ChatStream 发 chat 请求并返回原始 SSE body 流（调用方负责 Close）。
+// 无会话元数据的入口：会话头族由本级现场补齐（聚合键/消息 ID 各自生成一个）。
+func (c *Client) ChatStream(a *auth.Auth, body []byte, rctx ...context.Context) (rc io.ReadCloser, status int, respBody []byte, err error) {
+	return c.ChatStreamWithMeta(a, body, ChatMeta{}, rctx...)
+}
+
+// ChatStreamWithMeta 同 ChatStream，但由调用方给定会话头族元数据（见 ChatMeta）。
+// meta 须由 handler 在轮转循环外填一次、每次尝试原样复用：上游按轮级聚合键分组，
+// 换号/重试/降级各算一套会把同一次对话拆成多条。
+//
 // 非 2xx 时 rc 为 nil、body 为上游响应体（供调用方 Classify(status, string(body))）、err 为 nil；
 // 只有传输层失败才返回 err。
 //
@@ -273,13 +385,13 @@ func (c *Client) RefreshToken(a *auth.Auth) error {
 //   - 首字节前：ChatHTTP 的 Transport.ResponseHeaderTimeout（= HeaderTimeout）；
 //   - 流中空闲：MonitorBody 看门狗（= IdleTimeout），活跃吐数据续命；
 //   - 请求总时长：不设上限——长生成合法，由上面两层兜异常挂起。
-func (c *Client) ChatStream(a *auth.Auth, body []byte, rctx ...context.Context) (rc io.ReadCloser, status int, respBody []byte, err error) {
+func (c *Client) ChatStreamWithMeta(a *auth.Auth, body []byte, meta ChatMeta, rctx ...context.Context) (rc io.ReadCloser, status int, respBody []byte, err error) {
 	url := c.chatBase(a) + "/v2/chat/completions"
 	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(c.prepareBody(body)))
 	if err != nil {
 		return nil, 0, nil, err
 	}
-	ChatHeaders(req, a)
+	ChatHeadersWithMeta(req, a, meta)
 	// 派生可取消 ctx：从调用方 ctx 继承取消传播（客户端断连 → 本 ctx 取消），
 	// 同时让 MonitorBody 的 Close 能独立 cancel 本请求（空闲掐流）。
 	var parent context.Context = context.Background()

@@ -372,3 +372,71 @@ func newTestUpstream(t *testing.T, h http.HandlerFunc) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(h)
 }
+
+// reasoning_content / reasoning 是思维链镜像字段：客户端会把上一轮 reasoning 原样
+// 带回，历史里出现过的指纹（如裸 11128）此前完全不被净化 → 原样出站触发反探测。
+func TestReasoningFieldsSanitized(t *testing.T) {
+	msgs := []any{
+		map[string]any{"role": "assistant", "content": "ok", "reasoning_content": "上次遇到 11128 被拦截"},
+		map[string]any{"role": "assistant", "content": "ok", "reasoning": "again 11128 here"},
+	}
+	if !sanitizeMessages(msgs) {
+		t.Fatal("sanitizeMessages 未报告改动，reasoning 字段被跳过")
+	}
+	if got := msgs[0].(map[string]any)["reasoning_content"].(string); strings.Contains(got, "11128") {
+		t.Errorf("reasoning_content 未被净化: %q", got)
+	}
+	if got := msgs[1].(map[string]any)["reasoning"].(string); strings.Contains(got, "11128") {
+		t.Errorf("reasoning 未被净化: %q", got)
+	}
+}
+
+// 裸键名（无冒号无值）同样是指纹：剥离层只认「键名:值」形态，assistant 消息里
+// 用反引号引用裸键名会整条漏网。兜底层应做最小缩写。
+func TestBareBillingHeaderAbbreviated(t *testing.T) {
+	msgs := []any{map[string]any{"role": "assistant", "content": "see `x-anthropic-billing-header` field"}}
+	if !sanitizeMessages(msgs) {
+		t.Fatal("sanitizeMessages 未报告改动，裸键名未命中预检")
+	}
+	got := msgs[0].(map[string]any)["content"].(string)
+	if strings.Contains(strings.ToLower(got), "x-anthropic-billing-header") {
+		t.Errorf("裸键名未被缩写: %q", got)
+	}
+	if !strings.Contains(got, "x-anthropic-billing-hdr") {
+		t.Errorf("裸键名应缩写为 hdr 形态: %q", got)
+	}
+}
+
+// DSH 开发者身份句整句逐字命上游渠道校验（400/11128）；改写一个词即绕过，
+// 且原句结尾标点必须原样保留（匹配串不带标点）。
+func TestDSHIdentityRewritten(t *testing.T) {
+	msgs := []any{map[string]any{"role": "developer", "content": "You are an AI agent powered by DeepSeek Harness."}}
+	if !sanitizeMessages(msgs) {
+		t.Fatal("sanitizeMessages 未报告改动，DSH 身份句未命中")
+	}
+	got := msgs[0].(map[string]any)["content"].(string)
+	if strings.Contains(got, "powered by DeepSeek Harness") {
+		t.Errorf("身份句未被改写（仍会命中上游逐字拦截）: %q", got)
+	}
+	if !strings.Contains(got, "running on DeepSeek Harness") {
+		t.Errorf("改写语义不对: %q", got)
+	}
+	if !strings.HasSuffix(got, ".") {
+		t.Errorf("结尾标点应原样保留: %q", got)
+	}
+}
+
+// 边界保护：裸短语与同模板换名都**不该**被改写（实测上游对它们放行），
+// 避免过度净化污染用户内容。
+func TestDSHLookalikesNotTouched(t *testing.T) {
+	for _, s := range []string{
+		"DeepSeek Harness",
+		"You are a coding agent powered by the deepseek-v4.1-flash model.",
+		"You are an AI agent powered by SomeOtherThing.",
+	} {
+		msgs := []any{map[string]any{"role": "developer", "content": s}}
+		if sanitizeMessages(msgs) {
+			t.Errorf("不应改写: %q", s)
+		}
+	}
+}

@@ -10,6 +10,8 @@
 package session
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"log"
 	"sync"
@@ -291,6 +293,45 @@ func ExtractKey(body []byte) string {
 	}
 	return strOrEmpty(obj["conversation_id"])
 }
+
+// ExtractConversationID 从请求体提取**客户端会话 ID**，供出站 X-Conversation-ID 透传。
+// 只认会话字段，刻意不回落 user_id（与 ExtractKey 不同）：user_id 会把同一用户的所有
+// 并行对话钉成同一个出站会话 ID，粒度远粗于上游的对话聚合边界。
+// 键优先级：metadata.conversation_id → metadata.conversationId → conversation_id → conversationId。
+func ExtractConversationID(body []byte) string {
+	if len(body) == 0 {
+		return ""
+	}
+	var obj map[string]any
+	if err := json.Unmarshal(body, &obj); err != nil {
+		return ""
+	}
+	if meta, ok := obj["metadata"].(map[string]any); ok {
+		if v := strOrEmpty(meta["conversation_id"]); v != "" {
+			return v
+		}
+		if v := strOrEmpty(meta["conversationId"]); v != "" {
+			return v
+		}
+	}
+	if v := strOrEmpty(obj["conversation_id"]); v != "" {
+		return v
+	}
+	return strOrEmpty(obj["conversationId"])
+}
+
+// NewMessageID 生成 32 位小写 hex 随机 ID（会话兜底 / 消息 / 请求聚合键共用同一形状，
+// 也是 B3 链路要求的合法 TraceId 形态）。
+func NewMessageID() string {
+	var b [16]byte
+	_, _ = rand.Read(b[:])
+	return hex.EncodeToString(b[:])
+}
+
+// NewConversationID 生成出站兜底会话 ID（与消息 ID 同形状）。
+// 上游渠道校验只要求 X-Conversation-ID 在场、不校验会话是否真实存在，故客户端没带
+// 会话 ID 时用任意稳定字符串垫上即可（见 HanawaBanana/workbuddy2api #36）。
+func NewConversationID() string { return NewMessageID() }
 
 // strOrEmpty 把 JSON 字符串字段安全转 string（非字符串类型返回空）。
 func strOrEmpty(v any) string {

@@ -279,3 +279,45 @@ func TestLoadFromStoreRestores(t *testing.T) {
 		t.Errorf("restored c1 -> %s want a1", u)
 	}
 }
+
+func TestExtractConversationID(t *testing.T) {
+	cases := []struct{ body, want string }{
+		{`{"metadata":{"conversation_id":"mc"},"conversation_id":"top"}`, "mc"}, // metadata 蛇形优先
+		{`{"metadata":{"conversationId":"camel"},"conversation_id":"top"}`, "camel"},
+		{`{"conversation_id":"top"}`, "top"},
+		{`{"conversationId":"camel"}`, "camel"},
+		{`{"conversation_id":123}`, ""},             // 非字符串 → 空
+		{`{"metadata":{"user_id":"u1"}}`, ""},       // user_id 不是会话键
+		{`{"metadata":{"conversation_id":""}}`, ""}, // 空串 → 空
+		{`not json`, ""},
+		{``, ""},
+	}
+	for _, c := range cases {
+		if got := ExtractConversationID([]byte(c.body)); got != c.want {
+			t.Errorf("ExtractConversationID(%s)=%q want %q", c.body, got, c.want)
+		}
+	}
+}
+
+func TestNewConversationID(t *testing.T) {
+	a, b := NewConversationID(), NewConversationID()
+	if len(a) != 32 {
+		t.Errorf("len=%d want 32 hex", len(a))
+	}
+	if a == b {
+		t.Error("两次生成不应相同")
+	}
+}
+
+func TestNewMessageID(t *testing.T) {
+	a, b := NewMessageID(), NewMessageID()
+	if len(a) != 32 {
+		t.Errorf("len=%d want 32 hex（B3 TraceId 要求）", len(a))
+	}
+	if a == b {
+		t.Error("两次生成不应相同")
+	}
+	if NewConversationID() == "" {
+		t.Error("NewConversationID 不应为空")
+	}
+}

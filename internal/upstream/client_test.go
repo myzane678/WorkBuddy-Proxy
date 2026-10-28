@@ -24,6 +24,23 @@ func TestClassify(t *testing.T) {
 		{200, `{"code":10001,"msg":"积分不足，请充值"}`, ErrHardCredit},
 		{400, `{"code":1,"msg":"额度用尽"}`, ErrHardCredit},
 		{429, ``, ErrSoftRate},
+		// 429 带「额度/quota」措辞仍是限流：此前 hardMarkers 先跑会硬冷却到次日 04:00
+		{429, `{"code":6004,"msg":"quota exceeded"}`, ErrSoftRate},
+		{429, `{"msg":"额度不足"}`, ErrSoftRate},
+		{429, `{"code":12153,"msg":"Offline user session not found"}`, ErrSessionDead},
+		// 确定性请求级错误：换号结果不变，不罚号不轮转
+		{400, `{"code":11133,"msg":"the request parameters were rejected by the model provider"}`, ErrRequest},
+		{400, `{"code": 11133,"extError":{"type":"input_invalid"}}`, ErrRequest}, // JSON 空白容差
+		{400, `{"code":"11133"}`, ErrRequest},                                    // 字符串形态
+		{400, `{"code":11148,"msg":"tool calls and tool results do not match"}`, ErrRequest},
+		{400, `{"code":11135,"msg":"invalid_image_data"}`, ErrRequest},
+		{400, `{"code":11101,"msg":"Unmarshal chat params failed"}`, ErrClient},
+		// 11128 渠道拦截：概率性、与账号无关，需要同号重试而不是换号
+		{400, `{"code":11128,"msg":"Illegal API invocation from an unapproved channel"}`, ErrChannel},
+		{400, `{"code": 11128,"msg":"illegal api invocation"}`, ErrChannel}, // JSON 空白容差
+		{403, `{"code":"11128"}`, ErrChannel},                              // 字符串形态
+		{404, `{"code":11115,"msg":"prompt is too long"}`, ErrRequest}, // 不能落 ErrNotFound 误冷却
+		{400, `{"code":12345,"msg":"boom"}`, ErrClient},
 		{401, `Offline user session not found`, ErrSessionDead},
 		{401, `{"code":12153,"msg":"Offline user session not found"}`, ErrSessionDead},
 		{401, `{"code":9999,"msg":"bad token"}`, ErrClient},

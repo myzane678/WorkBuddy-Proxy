@@ -55,6 +55,10 @@ type Config struct {
 	Features struct {
 		// SanitizeBlacklistFingerprints 出站请求体黑名单指纹脱敏（默认 true；false 完全还原）。
 		SanitizeBlacklistFingerprints bool `json:"sanitize_blacklist_fingerprints"`
+		// CaptureRefusedBody 11128 渠道拦截时把出站请求体留样到 state_file 同目录
+		// （channel-refused-*.json，每进程最多 3 份），用于定位触发拦截的请求指纹。
+		// 留样含会话内容，仅本机私用；不需要时置 false 即可完全关闭。
+		CaptureRefusedBody bool `json:"capture_refused_body"`
 	} `json:"features"`
 
 	Upstash struct {
@@ -99,6 +103,7 @@ func Default() *Config {
 	c.Schedule.KeepaliveHours = []int{22}
 	c.Upstream.TimeoutSeconds = 120
 	c.Features.SanitizeBlacklistFingerprints = true
+	c.Features.CaptureRefusedBody = true
 	c.Pool.MaxInFlight = 3
 	c.Pool.BreakerThreshold = 3
 	c.Pool.BreakerCooldown = "30m"
@@ -167,6 +172,11 @@ func applyEnv(c *Config) {
 	if v := os.Getenv("WB2A_SANITIZE_FINGERPRINTS"); v != "" {
 		if b, err := strconv.ParseBool(v); err == nil {
 			c.Features.SanitizeBlacklistFingerprints = b
+		}
+	}
+	if v := os.Getenv("WB2A_CAPTURE_REFUSED_BODY"); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			c.Features.CaptureRefusedBody = b
 		}
 	}
 }

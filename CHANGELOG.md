@@ -1,5 +1,74 @@
 # CHANGELOG
 
+## 2026-10-29 · v1.4.0：官方会话头族 + 请求级错误分流（11128 渠道拦截定位与自愈）
+
+### 新增
+- **官方客户端会话头族**（对齐 hanawa 上游 issue #35/#36，此前本仓库整片空白）：
+  出站恒发 `X-Conversation-ID`（客户端原值优先 → handler 轮级兜底 → 零值现场生成，
+  不存在「可以不发」的路径）；新增 `X-Conversation-Request-ID` / `X-Root-Request-ID`
+  （轮级聚合主键，入站自带则透传）、`X-Conversation-Message-ID` = `X-Request-ID`
+  （消息级 32 hex）、`X-Trace-ID`（入站透传/回落轮级键）、
+  `X-B3-TraceId`/`SpanId`/`Sampled`（B3 只认 16/32 hex，非法轮级键回落消息 ID）。
+  **全部在轮转循环外算一次**，换号/重试/降级复用同一组值，否则同一次对话在后台被拆成多条。
+- chat 出站 `Accept` 改为官方桌面端形态 `application/json, text/event-stream`
+  （`CommonHeaders` 的 `*/*` 是非流式 RPC 默认，属渠道指纹偏差）。
+- **11128 请求体留样**（`features.capture_refused_body`，默认开）：命中渠道拦截时把
+  客户端入站原文 + 上游拒绝原文写入 `data/channel-refused-*.json`（每进程最多 3 份、
+  单份上限 8 MiB）。留样含会话内容，仅本机私用；`false` 或 `WB2A_CAPTURE_REFUSED_BODY=0`
+  可完全关闭。
+
+### 修复
+- **429 带额度措辞被误判成积分耗尽（P0）**。`Classify` 里 `hardMarkers` 排在
+  `status == 429` 之前，限流响应高频携带 `quota exceeded` / `额度不足` 这类跨两界措辞，
+  于是普通限流被硬冷却到**次日 04:00**——单账号部署等于全站停摆到签到。
+  改为 429 先短路（账号级终态 12153 仍更优先），非 429 的额度措辞语义不变。
+- **确定性请求级 4xx 被当成账号故障轮转（P0）**。11115（上下文超限）/11133（参数被模型
+  拒绝，上游 issue #39）/11135（图片无效）/11148（工具配对断裂）此前归入通用 4xx：
+  换号注定再失败，末端还把 4xx 包装成 503 `no_healthy_account`，客户端按可重试语义无限
+  重试，每轮放大成 MaxRotate 次上游调用。新增 `ErrRequest`：**不罚号、不轮转、原样透传
+  上游状态码与原文**（11115 会给出真实 token 数与上限）。
+- **11128 渠道拦截的处置方向错误**。同一请求 1 秒后重试即通过（实测 10-28 23:19:36 拦截
+  → 23:19:37 同账号 200），说明换号无意义、单账号部署下轮转直接等于失败。新增
+  `ErrChannel`：同号退避重试（300ms/600ms，最多 3 次，客户端断连即停手）；仍被拒时返回
+  专用错误码 `upstream_channel_refused`，不再伪装成「账号池不可用」，也不牵连其他健康号。
+- **工具调用与结果配对断裂**（移植上游 #154，`tool_pairing.go`）：`system`/`developer`
+  通知夹在 `assistant.tool_calls` 与其结果之间、或客户端历史里存在孤儿 tool_call/工具结果
+  （工具执行失败后写不回结果，坏历史被每次请求原样重放）都会让上游对**整条会话后续每条
+  消息**返 400。新增 `repackToolResultBlocks`（把插队通知挪到整组之后，只调顺序不改内容）
+  与 `cleanupOrphanToolCalls`（两侧按同一份 keepCalls 对称裁剪），独立于 sanitize 开关执行。
+- **`max_completion_tokens` 别名未翻译**：上游只认 `max_tokens`，别名被忽略后回落默认输出
+  上限（实测 32000），长流任务被静默截断。新增翻译（显式 `max_tokens` 优先；0/null/负数
+  不翻译；别名一律删除）。
+- **字符串形态 `image_url` 未兼容**：`{"type":"image_url","image_url":"https://…"}` 会被上游
+  按图片无效拒收，现统一转成对象形态 `{"url": …}`。
+- **DSH 开发者身份句触发 11128**（本次 503 的直接根因）：上游对
+  `You are an AI agent powered by DeepSeek Harness.` 做**整句逐字**拦截，返回
+  `400 / 11128 "Illegal API invocation from an unapproved channel"`。该句写在 DeepSeek
+  Harness 客户端的固定 developer 提示里，与对话内容无关——**换会话/重启都不会消失**。
+  改写 `powered by` → `running on`（语义不变、破坏逐字匹配、原标点保留）。
+  实测边界（同一账号逐条对照）：裸短语 `DeepSeek Harness` 放行、
+  `You are a coding agent powered by the deepseek-v4.1-flash model.` 放行、
+  同模板换名 `powered by SomeOtherThing.` 放行——只有这一整句被拦，因此不做泛化替换。
+- 脱敏盲区补齐：`reasoning_content` / `reasoning`（思维链镜像回传的指纹此前原样出站）、
+  裸键名 `x-anthropic-billing-header`（无冒号无值，剥离层对不上，现做 `hdr` 最小缩写）。
+
+### 测试
+- 新增 `internal/upstream/{headers,payload_compat,tool_pairing,sanitize}_test.go` 与
+  `internal/server/{conv_header,request_error,capture}_test.go`，共 25 个用例：会话头恒发/
+  原值优先/轮转换号复用同键、B3 回落与合法 hex 直取、429 与额度措辞顺序、请求级错误透传
+  400 且只打 1 次上游、11128 同号重试自愈、`upstream_channel_refused` 专用错误、tool 配对
+  重排/孤儿清理、`max_completion_tokens` 与 `image_url` 兼容、DSH 身份句改写与三个形似句
+  不误伤、留样落盘与开关关闭。
+- `go vet` 干净，`go test ./...` 八包全绿。
+- 真机验证：修复前留样原文回放稳定 503，修复后同一份 body 回放 **HTTP 200**。
+
+### 排查记录（11128 的定位链）
+1. 留样抓到完整入站 body（117 KB / 5 条消息 / 64 个 tool）；
+2. 回放复现 503，同模型极简请求 200 → 触发点在 body；
+3. 二分：只留 developer 消息 → 503，只留 tools → 200，只留参数 → 200；
+4. 单句验证锁定 `You are an AI agent powered by DeepSeek Harness.`；
+5. 修复后回放同一留样 → 200。
+
 ## 2026-10-08 · v1.3.1：修复大上下文会话 502（聊天超时拆分）
 
 ### 修复

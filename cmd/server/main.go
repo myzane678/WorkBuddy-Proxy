@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -116,6 +117,9 @@ func main() {
 		RedisMode:    redisMode,
 		SoftCooldown: cfg.SoftRateDur,
 		Allowlist:    cfg.ModelAllowlist,
+
+		CaptureRefusedBody: cfg.Features.CaptureRefusedBody,
+		CaptureDir:         filepath.Dir(cfg.StateFile),
 		Admin: server.AdminExtras{
 			Scheduler:  sch,
 			ConfigPath: *cfgPath,

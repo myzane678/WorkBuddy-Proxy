@@ -18,12 +18,19 @@ var sanitizeFeatures = []string{
 	"You are Claude Code",        // 身份句（截断前缀即可命中）
 	"Main branch (",              // 注入指令句（截断前缀即可命中）
 	"You are a coding agent running in the Codex CLI", // Codex instructions 首段（截断前缀即可命中）
-	"github.com/anthropics/",     // 反馈句里的 Anthropic 仓库链接
-	"11128",                      // 上游反探测：裸数字错误码
+	"You are an AI agent powered by DeepSeek Harness",  // DSH 开发者身份句（整句逐字拦截）
+	"github.com/anthropics/",                          // 反馈句里的 Anthropic 仓库链接
+	"11128",                                           // 上游反探测：裸数字错误码
 }
 
 // sanitizeHdrRe 剥离层：header 键名即触发（与值无关），整段删除。
 var sanitizeHdrRe = regexp.MustCompile(`(?i)x-anthropic-billing-header:[^;\n]*;?\s*`)
+
+// sanitizeBareHdrRe 兜底层：**裸键名**（无冒号无值）同样是指纹。
+// 剥离层要求「键名:值」形态，assistant 消息里只是反引号引用裸键名时对不上，
+// 整条净化会被 hasFingerprint 放行后原样出站 → 400 code=11128。
+// 这里把残留裸键名做最小缩写（header→hdr）：破坏逐字匹配、语义与可读性不变。
+var sanitizeBareHdrRe = regexp.MustCompile(`(?i)x-anthropic-billing-header`)
 
 // sanitizeKvRe 剥离层：尾随裸键值（cc_xxx=...;）循环清理。
 var sanitizeKvRe = regexp.MustCompile(`(?i)\bcc_[a-z0-9_]+=[^;\n]*;?\s*`)
@@ -53,6 +60,19 @@ var sanitizeRewrites = [][2]string{
 		"You are a coding agent running in the Codex CLI tool, a terminal-based coding assistant.",
 	},
 	{
+		// DeepSeek Harness（DSH）开发者身份句：上游按**整句逐字**拦截，返回
+		// 400 code=11128 "Illegal API invocation from an unapproved channel"。
+		// 实测边界（2026-10-29，同一账号逐条对照）：
+		//   - 裸短语 "DeepSeek Harness" 单独出现 → 放行；
+		//   - "You are a coding agent powered by the deepseek-v4.1-flash model." → 放行；
+		//   - 同模板换名 "powered by SomeOtherThing." → 放行；
+		//   - 只有这一整句 → 稳定拦截（三次同号重试全被拒）。
+		// 因此只需破坏逐字匹配：powered by → running on，语义完全不变。
+		// 匹配串不带结尾标点，兼容句号/逗号等变体。
+		"You are an AI agent powered by DeepSeek Harness",
+		"You are an AI agent running on DeepSeek Harness",
+	},
+	{
 		// 反馈句：整句带 Anthropic 仓库链接，上游按整句拦截（只留链接或只留半边均不拦，
 		// 实测需整句同时出现）。give→provide 一词之差即可绕过，语义不变。
 		"To give feedback, users should report the issue at https://github.com/anthropics/claude-code/issues",
@@ -80,6 +100,10 @@ func sanitizeText(text string) string {
 	}
 	if sanitizeHdrRe.MatchString(text) {
 		text = sanitizeHdrRe.ReplaceAllString(text, "")
+	}
+	// 键值形态删完后，残留的裸键名再缩写（见 sanitizeBareHdrRe）。
+	if sanitizeBareHdrRe.MatchString(text) {
+		text = sanitizeBareHdrRe.ReplaceAllString(text, "x-anthropic-billing-hdr")
 	}
 	if strings.Contains(text, "cc_") {
 		prev := ""
@@ -182,6 +206,16 @@ func sanitizeMessages(messages []any) bool {
 		if tc, ok := m["tool_calls"]; ok {
 			if sanitizeToolCalls(tc) {
 				changed = true
+			}
+		}
+		// reasoning_content / reasoning：部分客户端把模型思维链镜像回传，里面的指纹同样
+		// 原样出站（deepseek 系尤其常见）。此前只扫 content/tool_calls 是盲区。
+		for _, key := range []string{"reasoning_content", "reasoning"} {
+			if rc, ok := m[key].(string); ok {
+				if s := sanitizeText(rc); s != rc {
+					m[key] = s
+					changed = true
+				}
 			}
 		}
 	}
