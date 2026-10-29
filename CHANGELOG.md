@@ -16,6 +16,9 @@
 - README「项目来源」更正：原上游 `Sliverkiss/workbuddy2api` 已于 2026-09 删库，
   改指延续仓库 [HanawaBanana/workbuddy2api](https://github.com/HanawaBanana/workbuddy2api)，
   并注明两个面板 fork 仅作取证参考（linguo 已停维护、misakano 仍在维护）。
+- `LICENSE` 版权行同步：保留原作者 `Sliverkiss (workbuddy2api upstream, original work)`
+  （MIT 要求保留原声明），新增 `HanawaBanana (workbuddy2api, continuation upstream)`
+  ——v1.4.0 的工具配对、会话头族等修复即移植自该延续仓库。
 
 ## 2026-10-29 · v1.4.0：官方会话头族 + 请求级错误分流（11128 渠道拦截定位与自愈）
 
