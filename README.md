@@ -6,14 +6,17 @@
 
 ## 项目来源
 
-本项目基于 [Sliverkiss/workbuddy2api](https://github.com/Sliverkiss/workbuddy2api)（MIT License）修改而来，感谢原作者的工作。相对上游的主要改动（多密钥管理、Admin 控制台、Windows 部署脚本等）详见 [CHANGELOG.md](CHANGELOG.md)。
+本项目基于 [HanawaBanana/workbuddy2api](https://github.com/HanawaBanana/workbuddy2api)（MIT License）修改而来，感谢原作者与延续维护者的工作。相对上游的主要改动（多密钥管理、Admin 控制台、Windows 部署脚本等）详见 [CHANGELOG.md](CHANGELOG.md)。
+
+> 原始上游 [Sliverkiss/workbuddy2api](https://github.com/Sliverkiss/workbuddy2api) 已于 2026-09 删库，HanawaBanana 是其延续仓库，查上游动态（commits / issues）以它为准。
+> 面板相关经验另可参考两个 fork：[linguo2625469/workbuddy2api-panel](https://github.com/linguo2625469/workbuddy2api-panel)（2026-10-21 起停止维护，11128 与脱敏实证记录最全）与 [misakano7545/workbuddy2api-panel](https://github.com/misakano7545/workbuddy2api-panel)（仍在维护）。二者仅作取证参考，本仓库未直接合并其代码。
 
 ## 功能特性
 
 - 🔐 **OAuth 登录** — 通过 `/v2/plugin/auth/state` 设备授权流程获取凭证，支持 token 自动刷新
 - 🔄 **多账号轮转** — 三因子加权随机选号（credits ×闲置×成功率），防热点 + 防惊群（100ms 窗口）
 - 🔑 **多密钥管理** — `/admin` 页面创建/启停/删除附加 API Key，掩码显示一键复制，即时生效、跨重启保留
-- 🖥 **Admin 控制台** — 左侧边栏多页面布局（运行概览/账号池/密钥管理/模型白名单/请求日志），点击栏目即跳转，窄屏自动收起为抽屉
+- 🖥 **Admin 控制台** — 侧边栏按「监控 / 资源 / 服务」分组（运行概览/请求日志/账号池/模型白名单/密钥管理），服务动作固定底部，可折叠为图标栏（状态记忆），三档响应式断点窄屏自动展开
 - 🛠 **工具调用** — 完整支持 OpenAI tools/tool_choice，流式 `tool_calls` 按 index 合并
 - 📡 **流式 + 非流式** — 上游 SSE 透传；非流式本地聚合（上游拒绝非流式请求）
 - ⏰ **定时签到** — 每日 09:00 / 21:00 自动签到 + 积分查询，积分耗尽账号次日 04:00 自动恢复
@@ -273,7 +276,7 @@ internal/
 
 ## 更新日志
 
-查看 [CHANGELOG.md](CHANGELOG.md)（最新版本 **v1.4.0**：官方会话头族 + 请求级错误分流，含 11128 渠道拦截定位与自愈）。
+查看 [CHANGELOG.md](CHANGELOG.md)（最新版本 **v1.5.0**：Admin 侧边栏改版 + 概览 Token 单位升到 M；上一版 v1.4.0 为官方会话头族 + 请求级错误分流）。
 
 ## License
 
