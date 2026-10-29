@@ -52,6 +52,13 @@ func main() {
 	p.RestoreFromSnapshot() // 择新恢复：Redis 快照比本地新才采用，否则本地优先
 	p.SyncToDir(auths)      // 与 auths 目录对齐：新账号加入、已删除文件账号剔除（状态保留）
 
+	// 升级前的统计没有账号维度：若池里恰好一个账号，把历史归到它（只执行一次）。
+	uids := make([]string, 0, len(auths))
+	for _, st := range p.List() {
+		uids = append(uids, st.UID)
+	}
+	server.BackfillLegacyStats(uids)
+
 	// 熔断器 + 在途上限 + 三因子加权调优（从 config 注入，非正值回退默认）。
 	p.SetBreaker(cfg.Pool.BreakerThreshold, cfg.BreakerCooldownDur, cfg.BreakerCooldownMaxD)
 	p.SetMaxInFlight(cfg.Pool.MaxInFlight)
@@ -120,6 +127,8 @@ func main() {
 
 		CaptureRefusedBody: cfg.Features.CaptureRefusedBody,
 		CaptureDir:         filepath.Dir(cfg.StateFile),
+		AuthDir:            cfg.AuthDir,
+		Region:             cfg.Region,
 		Admin: server.AdminExtras{
 			Scheduler:  sch,
 			ConfigPath: *cfgPath,

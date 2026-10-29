@@ -217,6 +217,38 @@ func TestRunKeepaliveSessionDeadDisables(t *testing.T) {
 	}
 }
 
+func TestRunKeepaliveSessionDeadKeepsLiveAccessToken(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(401)
+		w.Write([]byte(`{"code":12153,"msg":"refresh token failed:invalid_grant"}`))
+	}))
+	defer srv.Close()
+
+	p := pool.New("")
+	a := &auth.Auth{UID: "u1", AccessToken: "at", RefreshToken: "rt", ExpiresAt: time.Now().Add(24 * time.Hour).Unix()}
+	p.Add(a)
+
+	up := &upstream.Client{
+		HTTP:            srv.Client(),
+		ChatBaseCN:      srv.URL,
+		BillingBaseCN:   srv.URL,
+		ChatBaseGlobal:  srv.URL,
+		BillingBaseGlob: srv.URL,
+	}
+	New(Config{Pool: p, Upstream: up}).RunKeepaliveNow()
+
+	st, _ := p.Status("u1")
+	if st.Disabled {
+		t.Fatalf("access token 仍有效时不应禁用: %+v", st)
+	}
+	if p.Pick() == nil {
+		t.Fatal("账号应仍可被选中")
+	}
+	if st.Reason == "" {
+		t.Fatalf("应留下「需重登」提示: %+v", st)
+	}
+}
+
 func TestCheckinErrorDoesNotCrash(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(500)

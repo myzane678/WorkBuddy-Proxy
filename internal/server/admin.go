@@ -54,6 +54,12 @@ func (h *Handler) registerAdmin(ext AdminExtras) {
 	h.mux.HandleFunc("POST /admin/api/keys/create", h.withAuth(h.adminCreateKey))
 	h.mux.HandleFunc("POST /admin/api/keys/update", h.withAuth(h.adminUpdateKey))
 	h.mux.HandleFunc("POST /admin/api/keys/delete", h.withAuth(h.adminDeleteKey))
+	// 内嵌登录 + 账号管理（见 admin_login.go）。
+	h.mux.HandleFunc("POST /admin/api/login/start", h.withAuth(h.adminLoginStart))
+	h.mux.HandleFunc("GET /admin/api/login/poll", h.withAuth(h.adminLoginPoll))
+	h.mux.HandleFunc("POST /admin/api/accounts/enable", h.withAuth(h.adminAccountEnable))
+	h.mux.HandleFunc("POST /admin/api/accounts/disable", h.withAuth(h.adminAccountDisable))
+	h.mux.HandleFunc("POST /admin/api/accounts/delete", h.withAuth(h.adminAccountDelete))
 }
 
 func (h *Handler) adminPage(w http.ResponseWriter, r *http.Request) {
@@ -106,7 +112,8 @@ func modelIDs(list []map[string]any) []string {
 	return out
 }
 
-// adminRequests 请求日志：?limit=N（默认 20，上限 500）。
+// adminRequests 请求日志：?limit=N（默认 20，上限 500），可选 ?uid= 与 ?key= 过滤。
+// 日志里 uid 只存前 8 位，故按 uid 过滤用前缀匹配。
 func (h *Handler) adminRequests(w http.ResponseWriter, r *http.Request) {
 	limit := 20
 	if v := r.URL.Query().Get("limit"); v != "" {
@@ -114,7 +121,23 @@ func (h *Handler) adminRequests(w http.ResponseWriter, r *http.Request) {
 			limit = n
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"requests": recentRequests(limit)})
+	list := recentRequests(limit)
+	uid := r.URL.Query().Get("uid")
+	key := r.URL.Query().Get("key")
+	if uid != "" || key != "" {
+		filtered := make([]RequestEntry, 0, len(list))
+		for _, e := range list {
+			if uid != "" && (e.UID == "-" || !strings.HasPrefix(uid, e.UID)) {
+				continue
+			}
+			if key != "" && e.KeyID != key {
+				continue
+			}
+			filtered = append(filtered, e)
+		}
+		list = filtered
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"requests": list})
 }
 
 // adminCheckin 立即执行一轮签到 + 余额刷新 + 解冻。

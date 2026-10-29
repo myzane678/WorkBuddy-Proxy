@@ -1,5 +1,48 @@
 # CHANGELOG
 
+## 2026-10-29 · v1.6.0：后台内嵌登录 + 多账号管理；统计与日志按账号/Key 拆维度
+
+### 新增
+- **后台内嵌登录**：账号池页新增「添加账号 / 重新登录」按钮，直接走 WorkBuddy 插件 OAuth
+  设备流（`POST /v2/plugin/auth/state` 出授权链接 → 用户在浏览器完成登录 → 前端 2s 轮询
+  `GET /admin/api/login/poll` → `auth/token` + `login/account` 取凭据与 uid），成功后落盘
+  `auths/workbuddy-<uid>.json` 并**热加入账号池**（`Pool.Add` + `Pool.Enable`），全程无需重启、
+  无需再跑脚本；同一 uid 重新登录会覆盖凭据并自动清掉旧的禁用/冷却/熔断标记（`upsertLocked`
+  会保留旧 `disabled`，故重登必须显式启用）。协议实现抽成 `internal/login`（与 `cmd/login`
+  完全一致，BaseURL 可注入便于测试），`login-workbuddy.ps1` 保留为兜底脚本。
+- **账号管理接口**：`POST /admin/api/accounts/enable|disable|delete`（均走 Bearer 鉴权）。
+  删除为软删除——凭据移入 `auths/.deleted/`（不在 `workbuddy*.json` 扫描范围），再与目录对齐
+  剔除账号，可人工移回恢复；uid 一律经池内查找，不接受前端传路径。账号卡片新增操作按钮与
+  **access token 到期时间**、**禁用原因**展示（顺手修复「失败」列读不存在字段恒显示 0 的问题）。
+- **统计维度树**：`stats.json` 聚合从「天 × 模型」升级为**全站 → 账号(uid) → Key(keyID) → 模型**
+  四层（原有全站字段保留，兼容旧文件，也是「全部账号」口径）；`/admin/api/stats` 支持
+  `?uid=&key=`，新增 `keys` 聚合行。概览页头新增「账号 / Key」两个下拉（localStorage 记忆），
+  六张指标卡、Token 趋势、模型分布、签到卡、剩余积分全部随口径联动；「累计」卡在单账号/单
+  Key 口径下走 `Total.Accounts` 全时段桶（不受 30 天天桶修剪影响）。
+- **请求日志记 Key**：`withAuth` 命中后把 Key 身份注入请求 context（主 Key=`__main__`，
+  附加 Key=自身 ID，未配置鉴权=`__none__`），`RequestEntry` 新增 `key_id` / `key_name` 快照；
+  日志表新增「Key」列与筛选，CSV 导出同步，`/admin/api/requests` 支持 `?uid=&key=` 服务端过滤。
+- **历史迁移**：`BackfillLegacyStats` 在启动时执行——升级前的统计没有账号维度，若池内恰好
+  一个账号则把历史 `total` 与每日桶整体归到该 uid（否则保留全站口径，单账号视图从当日累计）；
+  Key 维度历史无法追溯、留空，从本版本起细分。幂等：已有账号维度即跳过。
+
+### 修复
+- **保活不再误杀还有效的账号**：`RunKeepaliveNow` 遇 refresh token 被上游判死（401 12153
+  「Offline user session not found」）时，若 access token 仍在有效期（实测即便 refresh 报
+  `invalid_grant: Session doesn't have required client`，access token 直连 chat 仍 200），
+  只记提示「refresh token 失效，请重新登录」并保留账号参与轮转；access token 也过期才禁用。
+  此前 2026-10-29 22:00 保活刷新失败曾把唯一账号永久禁用，面板 0/1 健康、全站 503，而官方
+  WorkBuddy 客户端（自带会话）不受影响。
+
+### 测试
+- 新增 `internal/login`（授权链接签发 / pending / 完成 / 5xx / 缺 uid 五态）、
+  `internal/server/admin_login_test.go`（start→pending→ok 全链路：落盘、热加入、旧禁用清除、
+  expires_at 透传；启停、未知账号 404、软删除与池剔除）、stats 维度用例（uid/key 分桶、
+  「全部账号 + 指定 Key」跨账号合并、按口径的 today/days/day_details、迁移幂等与多账号跳过）、
+  `scheduler_test.go` 保活分叉（access token 未过期保留并留提示 / 已过期禁用）、
+  `handler_test.go`（主 Key 与附加 Key 分别落入请求日志与统计 Key 桶）。
+- `go vet ./...` 干净，`go test ./... -count=1` 全绿；面板脚本经 `node --check` 语法校验。
+
 ## 2026-10-29 · v1.5.1：模型级 429 与账号故障分流（不再连坐冷却与熔断）
 
 ### 修复

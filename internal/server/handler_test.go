@@ -990,3 +990,54 @@ func TestStatusRequiresAuth(t *testing.T) {
 		t.Errorf("healthz: code=%d", rec.Code)
 	}
 }
+
+// TestChatLogRecordsKeyIdentity 主 Key 与附加 Key 各自落到请求日志与统计的 Key 维度。
+func TestChatLogRecordsKeyIdentity(t *testing.T) {
+	withChatLog(t)
+	iso := newTestStats(t)
+	oldStats := stats
+	stats = iso
+	defer func() { stats = oldStats }()
+
+	up := newFakeUpstream(t, func(string) (int, string, bool) { return 200, sseOK, true })
+	extra := APIKeyEntry{ID: "k2", Name: "测试机", Key: "wb-sk-test", Enabled: true}
+	h := NewHandler(Config{
+		Pool:     testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at1", ExpiresAt: 9999999999}),
+		Upstream: up,
+		APIKey:   "main-key",
+		APIKeys:  []APIKeyEntry{extra},
+	})
+	body := `{"model":"glm-5.2","messages":[{"role":"user","content":"hi"}],"stream":true}`
+	send := func(key string) {
+		req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+key)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != 200 {
+			t.Fatalf("code=%d body=%s", rec.Code, rec.Body)
+		}
+	}
+	send("main-key")
+	send(extra.Key)
+
+	seen := map[string]string{}
+	for _, r := range recentRequests(reqlogCapacity) {
+		if r.KeyID != "" {
+			seen[r.KeyID] = r.KeyName
+		}
+	}
+	if seen[keyMainID] != "主 Key" || seen["k2"] != "测试机" {
+		t.Fatalf("请求日志 Key 身份错误: %+v", seen)
+	}
+
+	iso.mu.Lock()
+	d := iso.Days[time.Now().Format("2006-01-02")]
+	iso.mu.Unlock()
+	a := d.Accounts["u1"]
+	if a == nil || a.Keys[keyMainID] == nil || a.Keys["k2"] == nil {
+		t.Fatalf("统计未按 Key 分桶: %+v", a)
+	}
+	if a.Keys["k2"].Requests != 1 || a.Keys[keyMainID].Requests != 1 {
+		t.Fatalf("Key 桶计数错误: main=%+v k2=%+v", a.Keys[keyMainID], a.Keys["k2"])
+	}
+}

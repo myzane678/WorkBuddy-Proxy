@@ -285,6 +285,27 @@ td.kname{font-family:inherit;font-weight:600;white-space:nowrap}
 .astats span:first-child{padding-left:0;border-left:none}
 .astats i{font-style:normal;display:block;color:var(--dim2);font-size:11px;line-height:1.5}
 .astats b{font-size:14px;font-weight:650;font-family:var(--mono);font-variant-numeric:tabular-nums}
+/* 口径选择器（账号 / Key）：与日期选择器并排放在页头 */
+.selscope{display:inline-flex;align-items:center;gap:6px;color:var(--dim);font-size:12.5px;white-space:nowrap}
+.selscope select.btn{max-width:190px}
+
+/* 账号卡底部操作行（重登/启用/禁用/删除） */
+.aacts{display:flex;gap:6px;margin-top:9px;flex-wrap:wrap}
+.aacts .mini{margin-left:0}
+
+/* ───── 添加账号弹窗（内嵌登录）───── */
+.logmask{position:fixed;inset:0;background:rgba(17,20,28,.45);z-index:920;display:none;align-items:center;justify-content:center}
+.logmask.on{display:flex}
+.logbox{width:min(540px,92vw);background:var(--card);border-radius:14px;box-shadow:0 20px 60px rgba(17,20,28,.28);padding:22px 24px 18px}
+.logbox h3{font-size:16px;margin-bottom:6px}
+.logbox .sub{color:var(--dim);font-size:12.5px;line-height:1.75;margin-bottom:14px}
+.logurl{display:flex;gap:8px;align-items:center;background:var(--soft);border:1px solid var(--line2);border-radius:8px;padding:9px 11px;margin-bottom:12px}
+.logurl code{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11.5px;font-family:var(--mono);color:#374151}
+.logurl .mini{margin-left:0}
+.logstat{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--dim);margin-bottom:4px}
+.logdot{width:8px;height:8px;border-radius:50%;background:var(--warn);animation:logpulse 1.2s ease-in-out infinite;flex:none}
+@keyframes logpulse{0%,100%{opacity:.35}50%{opacity:1}}
+.logfoot{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}
 
 /* ───── 白名单:多列网格铺满 + 工具条 ───── */
 .mtools{display:flex;align-items:center;gap:10px;margin-bottom:12px}
@@ -513,6 +534,8 @@ td.num{text-align:right}
         <h1>运行概览</h1>
         <span class="desc" id="uptime">–</span>
         <span class="acts">
+          <span class="selscope">账号 <select class="btn" id="selAcct" onchange="onScopeChange()"></select></span>
+          <span class="selscope">Key <select class="btn" id="selKey" onchange="onScopeChange()"></select></span>
           <span class="datewrap">
             <button class="btn datechip" id="datechip" onclick="toggleCal(event)" title="选择要查看的日期">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="16" rx="2.5"/><path d="M3.5 10h17M8 3v4M16 3v4"/></svg>
@@ -559,6 +582,9 @@ td.num{text-align:right}
       <div class="pagehead">
         <h1>账号池</h1>
         <span class="desc" id="acctHint"></span>
+        <span class="acts">
+          <button class="btn primary" onclick="addAccount()"><span class="knew">＋</span>添加账号</button>
+        </span>
       </div>
       <div class="card">
         <div id="accounts">
@@ -637,6 +663,7 @@ td.num{text-align:right}
             </select></label>
           <label>模型 <select class="btn" id="fModel" onchange="page=1;renderReqTable()"></select></label>
           <label>账号 <select class="btn" id="fUid" onchange="page=1;renderReqTable()"></select></label>
+          <label>Key <select class="btn" id="fKey" onchange="page=1;renderReqTable()"></select></label>
           <label>模式 <select class="btn" id="fMode" onchange="page=1;renderReqTable()">
             <option value="">全部</option>
             <option value="stream">流式</option>
@@ -655,11 +682,11 @@ td.num{text-align:right}
         <div class="tablewrap">
           <table id="reqTable">
             <thead><tr>
-              <th>#</th><th>时间</th><th>模型</th><th>模式</th><th>状态</th><th>账号</th>
+              <th>#</th><th>时间</th><th>模型</th><th>模式</th><th>状态</th><th>账号</th><th>Key</th>
               <th style="text-align:right">首字</th><th style="text-align:right">输入</th>
               <th style="text-align:right">输出</th><th style="text-align:right">积分</th><th style="text-align:right">耗时</th>
             </tr></thead>
-            <tbody id="reqBody"><tr><td colspan="11"><div class="sk" style="height:34px"></div></td></tr></tbody>
+            <tbody id="reqBody"><tr><td colspan="12"><div class="sk" style="height:34px"></div></td></tr></tbody>
           </table>
         </div>
         <div class="pagerbar" id="pagerBar"></div>
@@ -673,6 +700,18 @@ td.num{text-align:right}
   <div class="spin"></div>
   <b id="stopmaskTitle">正在停止服务…</b>
   <span id="stopmaskNote">确认服务下线后本窗口将自动关闭</span>
+</div></div>
+<div class="logmask" id="logmask"><div class="logbox">
+  <h3 id="logTitle">添加账号</h3>
+  <div class="sub">在浏览器打开下面的链接完成登录，本页会自动识别并加入账号池。<br>
+    要添加<b>另一个账号</b>，请用无痕窗口打开；否则浏览器会沿用当前登录态，登录成同一个号。</div>
+  <div class="logurl">
+    <code id="logUrl">…</code>
+    <button class="mini" onclick="copyLoginUrl()">复制</button>
+    <button class="mini" onclick="openLoginUrl()">打开</button>
+  </div>
+  <div class="logstat"><span class="logdot" id="logDot"></span><span id="logStat">正在获取授权链接…</span></div>
+  <div class="logfoot"><button class="btn" onclick="closeLogin()">关闭</button></div>
 </div></div>
 
 <script>
@@ -705,7 +744,57 @@ let statsData=null, distMode='today';
 let viewDate=null; // null=今日；'YYYY-MM-DD'=日历选中的历史某天（day_details 里的键）
 const PALETTE=['#4f46e5','#0ea5e9','#10b981','#f59e0b','#ef4444','#8b5cf6','#ec4899','#14b8a6','#f97316','#64748b'];
 const n2=x=>Number(x||0).toFixed(2);
-async function loadStats(){try{const d=await api('/admin/api/stats');statsData=d;renderOverview()}catch(e){}}
+
+/* —— 统计口径：账号 / Key 选择（存 localStorage，切换只重拉数据） —— */
+const LS_SCOPE_UID='zcode_admin_scope_uid', LS_SCOPE_KEY='zcode_admin_scope_key';
+let selUid=localStorage.getItem(LS_SCOPE_UID)||'', selKey=localStorage.getItem(LS_SCOPE_KEY)||'';
+let accountsCache=[];
+function scopeQuery(){
+  const p=[];
+  if(selUid)p.push('uid='+encodeURIComponent(selUid));
+  if(selKey)p.push('key='+encodeURIComponent(selKey));
+  return p.length?'?'+p.join('&'):'';
+}
+function keyName(id){
+  if(!id)return '';
+  if(id==='__main__')return '主 Key';
+  if(id==='__none__')return '未鉴权';
+  const k=(apiKeys||[]).find(x=>x.id===id);
+  return k?(k.name||k.id):id+'（已删除）'; // 已删 Key 的用量仍保留历史归属，标一下更清楚
+}
+// renderScopeSelectors 账号下拉来自账号池，Key 下拉来自当前口径下真实产生过用量的 Key。
+function renderScopeSelectors(){
+  const as=document.getElementById('selAcct');
+  if(as){
+    as.innerHTML=['<option value="">全部账号</option>'].concat(
+      accountsCache.map(a=>`<option value="${esc(a.uid)}">${esc(a.nickname||a.uid.slice(0,8))}</option>`)).join('');
+    // 账号列表还没拉到（首屏并发）时不校验，避免把已保存的选择误清空。
+    if(accountsCache.length&&selUid&&!accountsCache.some(a=>a.uid===selUid)){selUid='';localStorage.removeItem(LS_SCOPE_UID)}
+    as.value=selUid;
+  }
+  const ks=document.getElementById('selKey');
+  if(ks){
+    const list=(statsData&&statsData.keys)||[];
+    if(statsData&&selKey&&!list.some(k=>k.id===selKey)){selKey='';localStorage.removeItem(LS_SCOPE_KEY)}
+    ks.innerHTML=['<option value="">全部 Key</option>'].concat(
+      list.map(k=>`<option value="${esc(k.id)}">${esc(keyName(k.id))}</option>`)).join('');
+    ks.value=selKey;
+  }
+}
+function onScopeChange(){
+  selUid=document.getElementById('selAcct').value||'';
+  selKey=document.getElementById('selKey').value||'';
+  localStorage.setItem(LS_SCOPE_UID,selUid);
+  localStorage.setItem(LS_SCOPE_KEY,selKey);
+  viewDate=null; // 换口径回到今日，避免历史日期与账号口径交叉
+  loadStats();
+  loadOverview(); // 剩余积分、签到卡跟随账号
+  const fu=document.getElementById('fUid'), fk=document.getElementById('fKey');
+  if(fu)fu.value=(selUid||'').slice(0,8); // 日志里的账号只存前 8 位
+  if(fk)fk.value=selKey;
+  page=1;renderReqTable();
+}
+async function loadStats(){try{const d=await api('/admin/api/stats'+scopeQuery());statsData=d;renderOverview()}catch(e){}}
 // dayDataOf 取某天数据：今天走 today 汇总，历史走 day_details；无数据天返回零值骨架。
 function dayDataOf(date){
   if(!statsData)return null;
@@ -722,16 +811,22 @@ function renderOverview(){
   const lbl=statsData?dayLabel(vd):'今日';
   document.getElementById('datetxt').textContent=lbl;
   const tIn=t?t.in_tok:0, tOut=t?t.out_tok:0;
+  // 剩余积分是账号级数据（Key 不持有积分）：选了账号就显示该号，否则全站求和。
+  const scopeAcct=selUid?accountsCache.find(a=>a.uid===selUid):null;
+  const scopeLbl=selUid?(scopeAcct?(scopeAcct.nickname||selUid.slice(0,8)):selUid.slice(0,8)):'全部账号';
+  const remain=selUid?((scopeAcct&&scopeAcct.credits>0)?scopeAcct.credits:0):totalCredits;
   document.getElementById('usage').innerHTML=[
     card(2,`${lbl} Tokens`,fmtTok(tIn+tOut),`输入 ${fmtTok(tIn)} / 输出 ${fmtTok(tOut)}`),
     card(3,'累计 Tokens',tot?fmtTok(tot.in_tok+tot.out_tok):'0',
       tot?`输入 ${fmtTok(tot.in_tok)} / 输出 ${fmtTok(tot.out_tok)} · 自 ${(tot.since||'').slice(5)} 起`:'–'),
     card(1,`${lbl} 请求`,t?t.requests:0,t&&t.errors?`<span class="serr">失败 ${t.errors}</span>`:'全部成功'),
     card(4,`${lbl} 实扣积分`,t?n2(t.credit):'0.00',tot?`累计 ${n2(tot.credit)}`:'累计 0.00'),
-    card(0,'剩余积分',totalCredits>0?totalCredits.toFixed(2):'0.00','全部账号合计'),
+    card(0,'剩余积分',remain>0?remain.toFixed(2):'0.00',
+      selUid?esc(scopeLbl)+(selKey?' · '+esc(keyName(selKey)):''):'全部账号合计'),
     card(5,'平均首字',t&&t.ttfb_avg_ms>0?(t.ttfb_avg_ms/1000).toFixed(1)+'s':'–',
       t&&t.ttfb_n>0?`${lbl} ${t.ttfb_n} 次流式`:`${lbl}暂无流式`),
   ].join('');
+  renderScopeSelectors();
   renderTrend();renderDist();
 }
 function renderTrend(){
@@ -860,30 +955,43 @@ async function loadOverview(){
     allModels=d.all_models||[]; allowlist=d.allowlist||[];
     apiKeys=d.api_keys||[]; renderKeys();
     totalCredits=(d.accounts||[]).reduce((s,a)=>s+((a.credits>0)?a.credits:0),0);
+    accountsCache=d.accounts||[];
+    renderScopeSelectors();
     renderModels();
-    const accts=d.accounts||[];
+    const accts=accountsCache;
     document.getElementById('accounts').innerHTML=accts.length?accts.map(a=>{
       const sc=a.disabled?'bad':a.cooling?'cool':'ok';
       const st=a.disabled?'<span class="tag bad">禁用</span>':a.cooling?'<span class="tag cool">冷却</span>':'<span class="tag ok">健康</span>';
       const ini=esc(((a.nickname||'?').trim().charAt(0)||'?').toUpperCase());
-      return `<div class="acct ac-${sc}">
+      const uid=esc(a.uid||'');
+      const extra=[(a.uid||'').slice(0,8), a.expires_at?`到期 ${fmtExp(a.expires_at)}`:'', a.reason?esc(a.reason):'']
+        .filter(Boolean).join(' · ');
+      return `<div class="acct ac-${sc}" data-uid="${uid}">
         <div class="ahead">${ini}</div>
         <div class="amain">
           <div class="arow"><b>${esc(a.nickname||'-')}</b>${st}<span class="credit">积分<b>${a.credits??'-'}</b></span></div>
-          <div class="uid">${(a.uid||'').slice(0,8)}</div>
+          <div class="uid">${extra}</div>
           <div class="astats">
             <span><i>成功</i><b>${a.success_count??0}</b></span>
-            <span><i>失败</i><b>${a.fails??0}</b></span>
+            <span><i>失败</i><b>${a.breaker_fails??0}</b></span>
             <span><i>在途</i><b>${a.in_flight??0}</b></span>
           </div>
+          <div class="aacts">
+            <button class="mini" onclick="reloginAccount(this.closest('.acct').dataset.uid)">重新登录</button>
+            <button class="mini" onclick="toggleAccount(this.closest('.acct').dataset.uid,${a.disabled?'false':'true'})">${a.disabled?'启用':'禁用'}</button>
+            <button class="mini danger" onclick="deleteAccount(this.closest('.acct').dataset.uid)">删除</button>
+          </div>
         </div></div>`;
-    }).join(''):'<div class="empty">无账号，请先运行 login-workbuddy.ps1</div>';
+    }).join(''):'<div class="empty">暂无账号，点右上角「添加账号」登录，或运行 login-workbuddy.ps1</div>';
     const ci=document.getElementById('checkinfo');
     const rep=d.checkin;
-    if(!rep||!rep.results||!rep.results.length){
-      ci.innerHTML=`<div class="t">本进程尚未签到过</div><div class="nextcheck">下次自动签到 <b>${d.checkin_next||'-'}</b> · 每日 09:00 / 21:00</div>`}
+    // 签到结果按账号过滤：选了账号就只显示该号那一行。
+    const results=(rep&&rep.results)?rep.results.filter(r=>!selUid||r.uid===selUid):[];
+    if(!results.length){
+      const why=selUid?'该账号尚未签到':'本进程尚未签到过';
+      ci.innerHTML=`<div class="t">${why}</div><div class="nextcheck">下次自动签到 <b>${d.checkin_next||'-'}</b> · 每日 09:00 / 21:00</div>`}
     else{
-      const rows=rep.results.map(r=>{
+      const rows=results.map(r=>{
         const tag=r.ok?'<span class="tag ok">成功</span>':'<span class="tag bad">失败</span>';
         return `<div class="crow"><span class="cname">${esc(r.nickname||r.uid.slice(0,8))}</span>${tag}<span class="cmsg">${esc(r.msg||'')}</span><span class="ccr">积分 ${r.remain<0?'?':r.remain}</span></div>`;
       }).join('');
@@ -892,6 +1000,73 @@ async function loadOverview(){
         <div class="nextcheck">下次自动签到 <b>${d.checkin_next||'-'}</b> · 每日 09:00 / 21:00</div>`;
     }
     if(statsData)renderOverview(); // totalCredits 刷新后同步剩余积分卡
+  }catch(e){}
+}
+
+/* —— 账号池：内嵌登录 + 启用/禁用/删除 —— */
+let loginTimer=null, loginId='', loginDeadline=0;
+function fmtExp(unix){const d=new Date(unix*1000);const p=n=>String(n).padStart(2,'0');
+  return `${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`}
+function addAccount(){startLogin('添加账号')}
+function reloginAccount(uid){startLogin('重新登录 · '+(uid||'').slice(0,8))}
+async function startLogin(title){
+  if(loginTimer)return;
+  document.getElementById('logmask').classList.add('on');
+  document.getElementById('logTitle').textContent=title;
+  document.getElementById('logUrl').textContent='…';
+  document.getElementById('logStat').textContent='正在获取授权链接…';
+  document.getElementById('logDot').style.background='var(--warn)';
+  try{
+    const d=await api('/admin/api/login/start',{method:'POST'});
+    if(!d.ok)throw new Error(d.msg||'获取授权链接失败');
+    loginId=d.id; loginDeadline=Date.now()+5*60*1000;
+    document.getElementById('logUrl').textContent=d.auth_url;
+    document.getElementById('logStat').textContent='等待浏览器完成登录…';
+    window.open(d.auth_url,'_blank','noopener');
+    loginTimer=setInterval(pollLogin,2000);
+  }catch(e){failLogin(e.message||'获取授权链接失败')}
+}
+async function pollLogin(){
+  if(!loginId)return;
+  if(Date.now()>loginDeadline)return failLogin('登录超时，请重新点击「添加账号」');
+  try{
+    const d=await api('/admin/api/login/poll?id='+encodeURIComponent(loginId));
+    if(d.status==='ok'){
+      stopLogin();
+      document.getElementById('logmask').classList.remove('on');
+      toast(`已登录：${d.nickname||(d.uid||'').slice(0,8)}`,'ok');
+      loadOverview();
+      return;
+    }
+    if(d.status==='failed')return failLogin(d.msg||'登录失败');
+  }catch(e){/* 网络抖动继续轮询 */}
+}
+function failLogin(msg){
+  stopLogin();
+  document.getElementById('logDot').style.background='var(--err)';
+  document.getElementById('logStat').textContent=msg;
+  toast(msg,'err');
+}
+function stopLogin(){if(loginTimer){clearInterval(loginTimer);loginTimer=null}loginId=''}
+function closeLogin(){stopLogin();document.getElementById('logmask').classList.remove('on')}
+function openLoginUrl(){const u=document.getElementById('logUrl').textContent;
+  if(u&&u!=='…')window.open(u,'_blank','noopener')}
+function copyLoginUrl(){const u=document.getElementById('logUrl').textContent;
+  if(u&&u!=='…'){navigator.clipboard.writeText(u);toast('授权链接已复制','ok')}}
+async function toggleAccount(uid,disable){
+  if(disable&&!confirm(`确定禁用账号 ${uid.slice(0,8)}？禁用后不再参与轮转。`))return;
+  try{
+    const d=await api('/admin/api/accounts/'+(disable?'disable':'enable'),{method:'POST',body:JSON.stringify({uid})});
+    toast(d.msg||(d.ok?'已更新':'操作失败'),d.ok?'ok':'err');
+    if(d.ok)loadOverview();
+  }catch(e){}
+}
+async function deleteAccount(uid){
+  if(!confirm(`确定删除账号 ${uid.slice(0,8)}？凭据会移到 auths/.deleted，需要时可人工恢复。`))return;
+  try{
+    const d=await api('/admin/api/accounts/delete',{method:'POST',body:JSON.stringify({uid})});
+    toast(d.msg||(d.ok?'已删除':'操作失败'),d.ok?'ok':'err');
+    if(d.ok)loadOverview();
   }catch(e){}
 }
 
@@ -934,15 +1109,20 @@ function fillSel(id,vals){
 function rebuildFilterOptions(){
   fillSel('fModel',[...new Set(reqsCache.map(r=>r.model))].sort());
   fillSel('fUid',[...new Set(reqsCache.map(r=>r.uid||'-'))].sort());
+  // Key 下拉显示名称而非 id；选项按当前缓存里出现过的 Key 生成。
+  const kel=document.getElementById('fKey'),kcur=kel.value;
+  const kids=[...new Set(reqsCache.map(r=>r.key_id).filter(Boolean))].sort();
+  kel.innerHTML='<option value="">全部</option>'+kids.map(id=>
+    `<option value="${esc(id)}"${id===kcur?' selected':''}>${esc(keyName(id))}</option>`).join('');
 }
 function filteredReqs(){
-  const fm=fv('fModel'),fu=fv('fUid'),mo=fv('fMode'),st=fv('fStatus');
+  const fm=fv('fModel'),fu=fv('fUid'),fk=fv('fKey'),mo=fv('fMode'),st=fv('fStatus');
   return reqsCache.filter(r=>
-    (!fm||r.model===fm)&&(!fu||(r.uid||'-')===fu)&&(!mo||r.mode===mo)&&
+    (!fm||r.model===fm)&&(!fu||(r.uid||'-')===fu)&&(!fk||r.key_id===fk)&&(!mo||r.mode===mo)&&
     (!st||(st==='ok'?r.status<400:st==='4xx'?(r.status>=400&&r.status<500):r.status>=500)));
 }
 function resetFilters(){
-  ['fModel','fUid','fMode','fStatus'].forEach(id=>document.getElementById(id).value='');
+  ['fModel','fUid','fKey','fMode','fStatus'].forEach(id=>document.getElementById(id).value='');
   page=1;renderReqTable();
 }
 // pageSize 每页条数：双击展开态一页全显；否则取「每页」下拉。
@@ -982,12 +1162,13 @@ function renderReqTable(){
   const rows=list.slice((page-1)*ps,page*ps).map(r=>`<tr>
       <td class="dim">${r.seq}</td><td class="dim">${r.time}</td><td>${esc(r.model)}</td><td><span class="mode">${r.mode}</span></td>
       <td><span class="badge st-${String(r.status)[0]}">${r.status}</span></td><td class="dim">${r.uid||'-'}</td>
+      <td class="dim">${esc(keyName(r.key_id))||'-'}</td>
       <td class="num">${r.ttfb_ms<0?'-':fmtSec(r.ttfb_ms)}</td>
       <td class="num">${r.in_toks<0?'-':fmtTok(r.in_toks)}</td>
       <td class="num">${r.out_toks<0?'-':fmtTok(r.out_toks)}</td>
       <td class="num">${r.credit<0?'-':r.credit}</td>
       <td class="num">${(r.total_ms/1000).toFixed(1)}s</td></tr>`).join('');
-  document.getElementById('reqBody').innerHTML=rows||'<tr><td colspan="11" class="empty">暂无请求记录</td></tr>';
+  document.getElementById('reqBody').innerHTML=rows||'<tr><td colspan="12" class="empty">暂无请求记录</td></tr>';
   renderPager(total);
   document.getElementById('fCount').textContent=`${list.length}/${reqsCache.length} 条 · 5 秒自动刷新 · 环形缓冲 500 条跨重启保留`;
 }
@@ -1004,9 +1185,9 @@ function csvCell(v){return '"'+String(v).replace(/"/g,'""')+'"'}
 function exportCSV(){
   const list=filteredReqs();
   if(!list.length)return toast('当前筛选无数据可导出','warn');
-  const lines=[['时间','模型','模式','状态','账号','首字ms','输入','输出','积分','耗时ms'].join(',')]
+  const lines=[['时间','模型','模式','状态','账号','Key','首字ms','输入','输出','积分','耗时ms'].join(',')]
     .concat(list.map(r=>[
-      csvCell(r.time),csvCell(r.model),r.mode,r.status,csvCell(r.uid||'-'),
+      csvCell(r.time),csvCell(r.model),r.mode,r.status,csvCell(r.uid||'-'),csvCell(keyName(r.key_id)||'-'),
       r.ttfb_ms<0?'':r.ttfb_ms,r.in_toks<0?'':r.in_toks,r.out_toks<0?'':r.out_toks,
       r.credit<0?'':r.credit,r.total_ms].join(',')));
   const blob=new Blob(['\ufeff'+lines.join('\n')],{type:'text/csv;charset=utf-8'});

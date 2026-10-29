@@ -48,6 +48,12 @@ type Config struct {
 	CaptureRefusedBody bool
 	// CaptureDir 留样目录（空 = ./data）。
 	CaptureDir string
+	// AuthDir 凭据目录（后台添加/删除账号读写这里；空 = ./auths）。
+	AuthDir string
+	// Region 账号区（扫描 auths 时按它过滤；空 = cn）。
+	Region string
+	// LoginBase 登录上游基址（空 = https://copilot.tencent.com，测试可注入）。
+	LoginBase string
 }
 
 // Handler 主路由。
@@ -57,6 +63,8 @@ type Handler struct {
 	// limits 「账号 + 模型」维度的限流记忆（见 modellimit.go）：上游 429 只说明
 	// 这个模型的配额到顶，跳过该号该模型即可，不参与账号健康状态机。
 	limits *modelLimitStore
+	// logins 后台内嵌登录的会话表（见 admin_login.go）。
+	logins *loginSessions
 }
 
 // NewHandler 构建 handler。
@@ -70,7 +78,7 @@ func NewHandler(cfg Config) *Handler {
 	if cfg.RefreshSkew <= 0 {
 		cfg.RefreshSkew = 10 * time.Minute
 	}
-	h := &Handler{cfg: cfg, mux: http.NewServeMux(), limits: newModelLimitStore()}
+	h := &Handler{cfg: cfg, mux: http.NewServeMux(), limits: newModelLimitStore(), logins: newLoginSessions()}
 	h.mux.HandleFunc("POST /v1/chat/completions", h.withAuth(h.chatCompletions))
 	h.mux.HandleFunc("GET /v1/models", h.withAuth(h.models))
 	h.mux.HandleFunc("GET /status", h.withAuth(h.status))
@@ -83,16 +91,34 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.mux.ServeHTTP(w, r)
 }
 
+// keyIdentity 一次请求命中的 API Key 身份（供请求日志与统计按 Key 归属）。
+type keyIdentity struct {
+	ID   string
+	Name string
+}
+
+type keyIdentityCtxKey struct{}
+
+// keyIdentityFrom 取请求命中的 Key 身份；未经过 withAuth 时返回零值。
+func keyIdentityFrom(ctx context.Context) keyIdentity {
+	k, _ := ctx.Value(keyIdentityCtxKey{}).(keyIdentity)
+	return k
+}
+
 func (h *Handler) withAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		id := keyIdentity{ID: keyNoneID, Name: "未鉴权"}
 		if h.cfg.APIKey != "" {
 			authz := r.Header.Get("Authorization")
 			key := strings.TrimPrefix(authz, "Bearer ")
 			ok := strings.HasPrefix(authz, "Bearer ") && key == h.cfg.APIKey
-			if !ok { // 附加密钥列表：任一启用项命中即放行
+			if ok {
+				id = keyIdentity{ID: keyMainID, Name: "主 Key"}
+			} else { // 附加密钥列表：任一启用项命中即放行
 				for _, k := range h.cfg.APIKeys {
 					if k.Enabled && k.Key == key {
 						ok = true
+						id = keyIdentity{ID: k.ID, Name: k.Name}
 						break
 					}
 				}
@@ -102,7 +128,7 @@ func (h *Handler) withAuth(next http.HandlerFunc) http.HandlerFunc {
 				return
 			}
 		}
-		next(w, r)
+		next(w, r.WithContext(context.WithValue(r.Context(), keyIdentityCtxKey{}, id)))
 	}
 }
 
@@ -280,7 +306,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		if errors.As(err, &mbe) {
 			// 请求级统计：与下方正常路径一致地记一行表格日志 + /admin 请求日志。
 			// 注意 body 已被截断、无法解析 model，以空 body 构造（model 列记 "-"）。
-			st := newChatStat(time.Now(), nil, false)
+			st := newChatStat(time.Now(), nil, false, keyIdentityFrom(r.Context()))
 			defer st.done()
 			st.status = http.StatusRequestEntityTooLarge
 			// 显式落一行 stderr：旧行为下这类请求完全静默，是排查时最大的盲区。
@@ -299,7 +325,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	_ = json.Unmarshal(body, &peek)
 
 	// 请求级统计：出口即打一行表格日志（任何路径都会走到）。
-	st := newChatStat(time.Now(), body, peek.Stream)
+	st := newChatStat(time.Now(), body, peek.Stream, keyIdentityFrom(r.Context()))
 	defer st.done()
 
 	// 白名单门禁：非空时请求模型必须在列内（zcode-api 同语义 403 model_not_allowed）。

@@ -54,6 +54,7 @@ type Status struct {
 	Until           time.Time `json:"until,omitempty"`
 	Reason          string    `json:"reason,omitempty"`
 	Disabled        bool      `json:"disabled"`
+	ExpiresAt       int64     `json:"expires_at,omitempty"` // access token 到期（Unix 秒，0=未知）
 	SuccessCount    int64     `json:"success_count,omitempty"`
 	ErrTotal        int64     `json:"err_total,omitempty"`
 	LastSuccessTime time.Time `json:"last_success,omitempty"`
@@ -792,6 +793,35 @@ func (p *Pool) Disable(uid, reason string) {
 	}
 }
 
+// Enable 手动启用（后台「启用」与重登成功后调用）：清禁用标记、冷却与熔断器，
+// 让账号立即重新参与轮转。只清状态，不动累计成功/错误计数与积分。
+// 注意 upsertLocked 会保留旧 disabled，重登后的启用必须走这里，否则等于白登。
+func (p *Pool) Enable(uid string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if e, ok := p.byUID[uid]; ok {
+		e.disabled = false
+		e.reason = ""
+		e.coolKind = 0
+		e.until = time.Time{}
+		e.fails = 0
+		e.retryCount = 0
+		e.breakerUntil = time.Time{}
+		p.dirty.Store(true)
+	}
+}
+
+// NoteReason 记录一条不影响健康状态的提示（例如 refresh token 已失效、但 access token
+// 仍在有效期），供面板提示「需重登」。只有 Enable（重登/手动启用）会清掉。
+func (p *Pool) NoteReason(uid, reason string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if e, ok := p.byUID[uid]; ok {
+		e.reason = reason
+		p.dirty.Store(true)
+	}
+}
+
 // reviveCoolingLocked 只清冷却（until/coolKind/reason）并更新 credits，不动熔断器
 // （fails/retryCount/breakerUntil）。签到解冻走这里：签到成功只证明余额恢复与
 // billing 通道健康，不证明 chat 通道健康，熔断（连续 5xx 信号）不应被签到覆盖。
@@ -974,6 +1004,7 @@ func (p *Pool) statusOf(uid string, e *entry) Status {
 		Cooling:         now.Before(e.until) || now.Before(e.breakerUntil),
 		Reason:          e.reason,
 		Disabled:        e.disabled,
+		ExpiresAt:       e.a.ExpiresAt,
 		SuccessCount:    e.successCount,
 		ErrTotal:        e.errTotal,
 		LastSuccessTime: e.lastSuccess,

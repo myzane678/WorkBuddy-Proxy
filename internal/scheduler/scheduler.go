@@ -203,7 +203,9 @@ func (s *Scheduler) loadState() {
 	}
 }
 
-// RunKeepaliveNow 立即对所有账号刷新 token；session 死亡的自动禁用。
+// RunKeepaliveNow 立即对所有账号刷新 token。
+// refresh token 被判死（12153）时不再无条件禁用：access token 仍在有效期内说明账号还能用，
+// 只记提示（面板显示「需重登」）保留账号；access token 也过期了才禁用。
 func (s *Scheduler) RunKeepaliveNow() {
 	for _, st := range s.cfg.Pool.List() {
 		if st.Disabled {
@@ -217,7 +219,13 @@ func (s *Scheduler) RunKeepaliveNow() {
 			log.Printf("keepalive %s: %v", st.UID, err)
 			var ue *upstream.Error
 			if errors.As(err, &ue) && ue.Kind == upstream.ErrSessionDead {
-				s.cfg.Pool.Disable(st.UID, "12153 session dead")
+				if a.ExpiresAt > time.Now().Unix() {
+					log.Printf("keepalive %s: refresh token 已失效，但 access token 仍有效（到期 %s），保留账号，请在后台重新登录",
+						st.UID, time.Unix(a.ExpiresAt, 0).Format("2006-01-02 15:04"))
+					s.cfg.Pool.NoteReason(st.UID, "refresh token 失效，请重新登录")
+				} else {
+					s.cfg.Pool.Disable(st.UID, "12153 session dead")
+				}
 			}
 			continue
 		}

@@ -346,6 +346,31 @@ func TestDisablePersists(t *testing.T) {
 	}
 }
 
+func TestEnableClearsDisabledCooldownAndBreaker(t *testing.T) {
+	p := New("")
+	p.Add(&auth.Auth{UID: "u1", ExpiresAt: 1794837600})
+	p.Disable("u1", "12153 session dead")
+	p.Cooldown("u1", CoolSoft, time.Minute, "429 rate limit")
+	for i := 0; i < 5; i++ {
+		p.NoteError("u1") // 连续失败喂到熔断
+	}
+	if p.Pick() != nil {
+		t.Fatal("禁用期间不应被选中")
+	}
+	p.Enable("u1")
+	got := p.Pick()
+	if got == nil || got.UID != "u1" {
+		t.Fatalf("启用后应立即可选，pick=%+v", got)
+	}
+	st, _ := p.Status("u1")
+	if st.Disabled || st.Reason != "" || st.Cooling || st.BreakerFails != 0 {
+		t.Fatalf("启用后状态未清干净: %+v", st)
+	}
+	if st.ExpiresAt != 1794837600 {
+		t.Fatalf("expires_at 未透出: %+v", st)
+	}
+}
+
 func TestReenableIfCredits(t *testing.T) {
 	p := New("")
 	p.Add(&auth.Auth{UID: "u1"})

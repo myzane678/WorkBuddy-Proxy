@@ -25,6 +25,8 @@ type chatStat struct {
 	model  string
 	mode   string // "stream" | "sync"
 	uid    string // 完整 uid，展示时只取前 8 位
+	keyID  string // 命中的 API Key 标识（主 Key = __main__）
+	keyName string // Key 显示名（快照，key 改名不影响历史日志）
 	ttfb   time.Duration
 	toks   int // <0 表示 usage 缺失 → 显示 "-"
 	inToks int // 输入 tokens，<0 表示 usage 缺失
@@ -35,12 +37,13 @@ type chatStat struct {
 }
 
 // newChatStat 以请求进入 handler 的时刻为起点构造统计对象；toks 默认 -1（usage 缺失）。
-func newChatStat(now time.Time, body []byte, stream bool) *chatStat {
+func newChatStat(now time.Time, body []byte, stream bool, key keyIdentity) *chatStat {
 	mode := "sync"
 	if stream {
 		mode = "stream"
 	}
-	return &chatStat{start: now, model: parseModelFromBody(body), mode: mode, toks: -1, inToks: -1, credit: -1}
+	return &chatStat{start: now, model: parseModelFromBody(body), mode: mode, toks: -1, inToks: -1, credit: -1,
+		keyID: key.ID, keyName: key.Name}
 }
 
 // done 幂等落一行表格日志，并记入 /admin 请求日志环形缓冲。
@@ -59,13 +62,15 @@ func (s *chatStat) done() {
 		Mode:    s.mode,
 		Status:  s.status,
 		UID:     uidPrefix(s.uid),
+		KeyID:   s.keyID,
+		KeyName: s.keyName,
 		TTFBMs:  ttfbOrMinusOne(s.ttfb),
 		InToks:  s.inToks,
 		OutToks: s.toks,
 		Credit:  s.credit,
 		TotalMs: total.Milliseconds(),
 	})
-	stats.record(s.model, s.status, s.inToks, s.toks, s.credit, ttfbOrMinusOne(s.ttfb))
+	stats.record(s.uid, s.keyID, s.model, s.status, s.inToks, s.toks, s.credit, ttfbOrMinusOne(s.ttfb))
 }
 
 // chatStatsReader 在流式透传时抓取 SSE 末帧的 usage.completion_tokens 精确值，

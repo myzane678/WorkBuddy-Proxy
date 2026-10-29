@@ -18,17 +18,19 @@ const (
 
 // RequestEntry 单条请求记录。
 type RequestEntry struct {
-	Seq    int64  `json:"seq"`
-	Time   string `json:"time"` // MM-DD HH:MM:SS
-	Model  string `json:"model"`
-	Mode   string `json:"mode"` // stream | sync
-	Status int    `json:"status"`
-	UID    string `json:"uid"` // 前 8 位
-	TTFBMs int64  `json:"ttfb_ms"` // -1 = 无（非流式无首字概念）
-	InToks int    `json:"in_toks"`  // -1 = usage 缺失
-	OutToks int   `json:"out_toks"` // -1 = usage 缺失
-	Credit float64 `json:"credit"` // 本次实扣积分（usage.credit），-1 = 缺失
-	TotalMs int64 `json:"total_ms"`
+	Seq     int64   `json:"seq"`
+	Time    string  `json:"time"` // MM-DD HH:MM:SS
+	Model   string  `json:"model"`
+	Mode    string  `json:"mode"` // stream | sync
+	Status  int     `json:"status"`
+	UID     string  `json:"uid"`      // 前 8 位
+	KeyID   string  `json:"key_id,omitempty"`   // 命中的 API Key 标识（主 Key = __main__）
+	KeyName string  `json:"key_name,omitempty"` // Key 显示名快照
+	TTFBMs  int64   `json:"ttfb_ms"`  // -1 = 无（非流式无首字概念）
+	InToks  int     `json:"in_toks"`  // -1 = usage 缺失
+	OutToks int     `json:"out_toks"` // -1 = usage 缺失
+	Credit  float64 `json:"credit"`   // 本次实扣积分（usage.credit），-1 = 缺失
+	TotalMs int64   `json:"total_ms"`
 }
 
 // reqlogStore 全局日志存储（进程级单例，handler 直接调用）。
