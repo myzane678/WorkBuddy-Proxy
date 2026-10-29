@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -53,6 +54,9 @@ type Config struct {
 type Handler struct {
 	cfg Config
 	mux *http.ServeMux
+	// limits 「账号 + 模型」维度的限流记忆（见 modellimit.go）：上游 429 只说明
+	// 这个模型的配额到顶，跳过该号该模型即可，不参与账号健康状态机。
+	limits *modelLimitStore
 }
 
 // NewHandler 构建 handler。
@@ -66,7 +70,7 @@ func NewHandler(cfg Config) *Handler {
 	if cfg.RefreshSkew <= 0 {
 		cfg.RefreshSkew = 10 * time.Minute
 	}
-	h := &Handler{cfg: cfg, mux: http.NewServeMux()}
+	h := &Handler{cfg: cfg, mux: http.NewServeMux(), limits: newModelLimitStore()}
 	h.mux.HandleFunc("POST /v1/chat/completions", h.withAuth(h.chatCompletions))
 	h.mux.HandleFunc("GET /v1/models", h.withAuth(h.models))
 	h.mux.HandleFunc("GET /status", h.withAuth(h.status))
@@ -308,6 +312,11 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	tried := map[string]bool{}
 	var lastErr error
+	// 模型级限流现场（本请求最近一次命中 429 或命中限流记忆）：
+	// 出口据此返回 429 而不是「账号池不可用」的 503。
+	var limited bool
+	var limitedBody string
+	var limitedUntil time.Time
 
 	// 会话粘性：从请求体提取会话键并解析绑定号（找不到/无效则 stickyUID 为空，走普通轮换）。
 	sessKey := ""
@@ -380,6 +389,18 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		}
 		st.uid = acct.UID
 		tried[acct.UID] = true
+
+		// 该号的这个模型还在限流窗口内：跳过，不占名额、不碰账号健康。
+		// 限流是模型维度的，同号其他模型照常服务（见 modellimit.go）。
+		if lim, ok := h.limits.get(acct.UID, st.model); ok {
+			limited, limitedBody, limitedUntil = true, lim.body, lim.until
+			if stickyUID == acct.UID {
+				// 粘性号本身健康，只是该模型在窗口内：本次请求改用其他号，
+				// 但**不解绑**——配额恢复后会话自然回到原号。
+				stickyUID = ""
+			}
+			continue
+		}
 
 		// 占用在途名额：Pick 已跳过满额账号，此处 CAS 兜底并发抢名额的竞态。
 		if !h.cfg.Pool.Acquire(acct.UID) {
@@ -471,12 +492,28 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 				st.status = http.StatusServiceUnavailable
 				return
 			}
+			// 模型级限流（429 / 上游 code=6004）：上游按「账号 + 模型」计用量，到顶只影响
+			// 该模型。旧行为走 applyErrorPolicy → pool.Cooldown 冷却整个账号，而 Cooldown
+			// 同时是熔断器的失败信号（3 次即熔断，指数退避可达 4 小时），出口再包装成 503
+			// ——单账号部署下这等于「一个模型配额到顶 = 整个代理挂掉」。改为只记
+			// (uid, model) 短窗口，窗口外的同号其他模型照常服务，出口保留 429 语义。
+			if kind == upstream.ErrSoftRate {
+				until := time.Now().Add(h.cfg.SoftCooldown)
+				h.limits.set(acct.UID, st.model, until, string(respBody))
+				limited, limitedBody, limitedUntil = true, string(respBody), until
+				log.Printf("chat uid=%s model=%s: 上游模型级限流(429)，%v 内跳过该号的该模型（账号不冷却、不喂熔断）",
+					acct.UID, st.model, h.cfg.SoftCooldown)
+				releaseHeld()
+				continue
+			}
 			lastErr = &upstream.Error{Kind: kind, Status: status, Msg: string(respBody)}
 			h.applyErrorPolicy(acct.UID, kind)
 			fail(acct.UID)
 			continue
 		}
 		h.cfg.Pool.NoteSuccess(acct.UID)
+		// 该模型在这个号上恢复正常：清掉可能残留的限流记忆，避免继续白跳过能用的号。
+		h.limits.clear(acct.UID, st.model)
 		// 粘性跟随最终成功号：本轮成功的账号成为该会话的粘性绑定（覆盖旧绑定）。
 		// 若 sticky 号失败、轮换到别的号成功，这里把会话重绑到新号，多轮对话下一跳不再随机抽。
 		if sessKey != "" && h.cfg.Session != nil {
@@ -521,6 +558,19 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		st.credit = syncCredit(resp)
 		// 准实时余量：从池内 credits 本地扣减本次实扣（签到回写时由上游对账校正）。
 		h.cfg.Pool.DeductCredit(acct.UID, st.credit)
+		return
+	}
+	// 模型级限流优先于「账号池不可用」：429 是配额问题，客户端等窗口重置或换模型即可。
+	// 给 503 会被当成代理故障无限重试，并把「单模型到顶」与「账号真挂了」混为一谈。
+	if limited {
+		if !limitedUntil.IsZero() {
+			if secs := int(time.Until(limitedUntil).Seconds()) + 1; secs > 0 {
+				w.Header().Set("Retry-After", strconv.Itoa(secs))
+			}
+		}
+		writeOpenAIError(w, http.StatusTooManyRequests, "model_rate_limited",
+			fmt.Sprintf("上游对该模型限流（429，与账号健康无关，同账号其他模型不受影响）：%s", clip(limitedBody, 300)))
+		st.status = http.StatusTooManyRequests
 		return
 	}
 	msg := "all accounts unavailable (cooling/disabled)"
